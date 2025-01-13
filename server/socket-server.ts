@@ -34,7 +34,16 @@ interface ReplyError {
 }
 
 // Load environment variables
-dotenv.config({ path: '.env.local' })
+try {
+  dotenv.config({ path: '.env.local' })
+} catch (error) {
+  console.log('[Socket Server] No .env.local found, falling back to process.env')
+}
+
+// Additional fallback for production
+if (process.env.NODE_ENV === 'production') {
+  console.log('[Socket Server] Running in production mode, using process.env')
+}
 
 // Log loaded environment variables (excluding sensitive ones)
 const envVars = Object.keys(process.env).filter(key => 
