@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs'
 import { DynamoDBService } from '@/lib/services/dynamodb'
-import io from '@/server/socket-server'
+import io from '@/server/socket'
 
 const dynamoDb = new DynamoDBService()
 
