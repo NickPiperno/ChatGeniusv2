@@ -490,14 +490,23 @@ export class DynamoDBService {
 
       await dynamodb.send(new PutCommand({
         TableName: TableNames.GroupChats,
-        Item: item,
-        ConditionExpression: 'attribute_not_exists(id)'
+        Item: item
       }))
       
-      console.log('[DynamoDB] Successfully created group chat')
+      console.log('[DynamoDB] Successfully created group chat:', {
+        id: item.id,
+        name: item.name,
+        creatorId: item.creatorId,
+        members: item.members
+      })
       return item
     } catch (error) {
-      console.error('[DynamoDB] Error creating group chat:', error)
+      console.error('[DynamoDB] Error creating group chat:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        groupId: groupChat.id,
+        name: groupChat.name
+      })
       throw error
     }
   }
