@@ -13,6 +13,7 @@ import { useUser } from '@clerk/nextjs'
 import { useGroups } from '@/hooks/data/use-groups'
 import { Button } from '@/components/ui/button'
 import { logger } from '@/lib/logger'
+import { fetchApi } from '@/lib/api-client'
 
 interface GroupPageClientProps {
   group: Group
@@ -80,8 +81,8 @@ export function GroupPageClient({ group: initialGroup, messages, userId }: Group
         throw new Error(`Only the group creator can delete this group. Creator ID: ${group.creatorId}`)
       }
 
-      const response = await fetch(`/api/groups/${group.id}`, {
-        method: 'DELETE'
+      const response = await fetchApi(`/api/groups/${group.id}`, {
+        method: 'DELETE',
       })
 
       if (!response.ok) {
@@ -129,6 +130,7 @@ export function GroupPageClient({ group: initialGroup, messages, userId }: Group
     name: '', // These will be populated by the server
     email: '',
     username: '',
+    displayName: '',
     createdAt: Date.now(), // Use timestamp in milliseconds
     avatarUrl: ''
   }))

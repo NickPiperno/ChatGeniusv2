@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorBoundary } from "@/components/ui/feedback/ErrorBoundary"
 import { LoadingSpinner } from "@/components/ui/feedback/LoadingSpinner"
+import { fetchApi } from '@/lib/api-client'
 
 export function ProfileSettingsForm() {
   const { user } = useUser()
@@ -22,7 +23,7 @@ export function ProfileSettingsForm() {
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        const response = await fetch(`/api/user/username?userId=${user?.id}`)
+        const response = await fetchApi(`/api/user/username?userId=${user?.id}`)
         if (response.ok) {
           const data = await response.json()
           setUsername(data.username || user?.username || '')
@@ -45,15 +46,12 @@ export function ProfileSettingsForm() {
     setIsSavingUsername(true)
     
     try {
-      const response = await fetch('/api/user/update-username', {
+      const response = await fetchApi('/api/user/update-username', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          userId: user?.id,
-          username: username,
-        }),
+        body: JSON.stringify({ username }),
       })
 
       if (!response.ok) {
@@ -76,15 +74,12 @@ export function ProfileSettingsForm() {
     setIsSavingDisplayName(true)
     
     try {
-      const response = await fetch('/api/user/update-displayname', {
+      const response = await fetchApi('/api/user/update-displayname', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          userId: user?.id,
-          displayName: displayName,
-        }),
+        body: JSON.stringify({ displayName }),
       })
 
       if (!response.ok) {

@@ -22,6 +22,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { LoadingSpinner } from "@/components/ui/feedback/LoadingSpinner"
+import { fetchApi } from '@/lib/api-client'
 
 interface CreateDMDialogProps {
   children: React.ReactNode
@@ -45,7 +46,7 @@ export function CreateDMDialog({ children, onCreateDM }: CreateDMDialogProps) {
     if (newOpen && users.length === 0) {
       try {
         setLoading(true)
-        const response = await fetch('/api/users')
+        const response = await fetchApi('/api/users')
         if (!response.ok) throw new Error('Failed to fetch users')
         const data = await response.json()
         // Filter out current user

@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useGoogleLogin } from '@react-oauth/google'
 import { Calendar as CalendarIcon, Plus, AlertCircle } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { fetchApi } from '@/lib/api-client'
 
 interface CalendarEvent {
   id: string
@@ -41,7 +42,7 @@ export function GoogleCalendarIntegration() {
 
   const fetchEvents = async (accessToken: string) => {
     try {
-      const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      const response = await fetchApi('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
@@ -74,7 +75,7 @@ export function GoogleCalendarIntegration() {
         },
       }
 
-      const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      const response = await fetchApi('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,

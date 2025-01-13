@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { User } from '@/types/models/user'
+import { logger } from '@/lib/logger'
+import { fetchApi } from '@/lib/api-client'
 
 /**
  * Hook to fetch and manage user data
@@ -24,23 +26,37 @@ import { User } from '@/types/models/user'
 export function useUsers() {
   const [users, setUsers] = useState<User[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [version, setVersion] = useState(0)
 
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const response = await fetch('/api/users')
-        if (!response.ok) throw new Error('Failed to fetch users')
-        const data = await response.json()
-        setUsers(data)
-      } catch (error) {
-        console.error('Error fetching users:', error)
-      } finally {
-        setIsLoading(false)
+  const fetchUsers = async () => {
+    logger.debug('Fetching users')
+    try {
+      setIsLoading(true)
+      const response = await fetchApi('/api/users')
+      if (!response.ok) {
+        throw new Error(`Failed to fetch users: ${response.statusText}`)
       }
+      const data = await response.json()
+      setUsers(data)
+    } catch (error) {
+      logger.error('Error fetching users:', error)
+      throw error
+    } finally {
+      setIsLoading(false)
     }
+  }
 
-    fetchUsers()
+  const refetch = useCallback(() => {
+    setVersion(v => v + 1)
   }, [])
 
-  return { users, isLoading }
+  useEffect(() => {
+    fetchUsers()
+  }, [version])
+
+  return {
+    users,
+    isLoading,
+    refetch
+  }
 } 

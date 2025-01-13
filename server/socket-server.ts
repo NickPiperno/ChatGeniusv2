@@ -65,9 +65,18 @@ const dynamoDb = new DynamoDBService()
 
 // Rest of the server setup
 const httpServer = createServer()
+
+// Get the frontend URL from environment variables
+if (!process.env.NEXT_PUBLIC_API_URL) {
+  console.error('[Socket Server] NEXT_PUBLIC_API_URL is not defined');
+  process.exit(1);
+}
+
+console.log('[Socket Server] Allowing CORS from:', process.env.NEXT_PUBLIC_API_URL)
+
 const io = new SocketServer(httpServer, {
   cors: {
-    origin: process.env.NEXT_PUBLIC_API_URL ? [process.env.NEXT_PUBLIC_API_URL] : [],
+    origin: [process.env.NEXT_PUBLIC_API_URL],
     methods: ['GET', 'POST', 'OPTIONS'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization']
@@ -116,6 +125,21 @@ io.engine.on('transport', (transport: any, req: any) => {
 })
 
 io.on('connection', (socket: Socket) => {
+  console.log('[Socket Server] New client connected:', socket.id);
+  
+  socket.on('disconnect', () => {
+    console.log('[Socket Server] Client disconnected:', socket.id);
+  });
+
+  socket.on('error', (error) => {
+    console.error('[Socket Server] Socket error:', error);
+  });
+
+  // Log all incoming events
+  socket.onAny((eventName, ...args) => {
+    console.log('[Socket Server] Received event:', eventName, 'with args:', args);
+  });
+
   logger.info('[Socket] Client connected:', {
     socketId: socket.id,
     rooms: Array.from(socket.rooms),

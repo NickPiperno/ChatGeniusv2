@@ -28,6 +28,8 @@ import Picker from '@emoji-mart/react'
 import { useTheme } from 'next-themes'
 import { toast } from '@/components/ui/use-toast'
 import { FilePreview } from '@/components/chat/input/FilePreview'
+import { logger } from '@/lib/logger'
+import { fetchApi } from '@/lib/api-client'
 
 interface ChatSettings {
   enterToSend: boolean
@@ -317,52 +319,20 @@ export function MessageInputTiptap({
       }> = []
 
       if (uploadedFiles.length > 0) {
-        const formData = new FormData()
-        
-        // Change: Upload each file individually and collect responses
         const uploadPromises = uploadedFiles.map(async (file) => {
-          const singleFileForm = new FormData()
-          singleFileForm.append('file', file)  // Changed from 'files' to 'file'
-          if (groupId) {
-            singleFileForm.append('groupId', groupId)
-          }
-
-          console.log('[MessageInput] Uploading file:', {
+          const url = await handleFileUpload(file)
+          const type = file.type.startsWith('image/') ? 'image' as const : 'document' as const
+          return {
+            id: file.name,
             name: file.name,
-            type: file.type,
-            size: file.size
-          })
-
-          const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: singleFileForm,
-          })
-
-          if (!response.ok) {
-            const errorText = await response.text()
-            console.error('[MessageInput] Upload failed for file:', {
-              fileName: file.name,
-              status: response.status,
-              statusText: response.statusText,
-              error: errorText
-            })
-            throw new Error(`Failed to upload file ${file.name}: ${response.statusText}`)
+            url,
+            type
           }
-
-          const responseData = await response.json()
-          console.log('[MessageInput] Upload response for file:', file.name, responseData)
-
-          return responseData[0]  // The API returns an array with a single file
         })
 
         try {
           const uploadResults = await Promise.all(uploadPromises)
-          attachments = uploadResults.map(file => ({
-            id: file.id,
-            name: file.name,
-            url: file.url,
-            type: file.type.startsWith('image/') ? 'image' : 'document' as const
-          }))
+          attachments = uploadResults
           console.log('[MessageInput] All files uploaded successfully:', attachments)
         } catch (error) {
           console.error('[MessageInput] Error uploading files:', error)
@@ -565,6 +535,28 @@ export function MessageInputTiptap({
         .run()
     }
   }, [editor])
+
+  const handleFileUpload = async (file: File): Promise<string> => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const response = await fetchApi('/api/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.url
+    } catch (err) {
+      logger.error('Error uploading file:', err)
+      throw new Error('Failed to upload file')
+    }
+  }
 
   if (!editor) {
     return null

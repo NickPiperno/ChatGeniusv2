@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { UserAvatar } from "./UserAvatar"
 import { StatusIndicator } from "./StatusIndicator"
+import { fetchApi } from '@/lib/api-client'
 
 interface UserProfileProps {
   isCollapsed?: boolean
@@ -43,7 +44,7 @@ export function UserProfile({
   useEffect(() => {
     const fetchUsername = async () => {
       try {
-        const response = await fetch("/api/user/username?userId=" + user?.id)
+        const response = await fetchApi(`/api/user/username?userId=${user?.id}`)
         if (response.ok) {
           const data = await response.json()
           setCustomUsername(data.username || user?.username || "")

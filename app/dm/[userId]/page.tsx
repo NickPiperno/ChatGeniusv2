@@ -10,6 +10,7 @@ import { SearchBar } from '@/components/SearchBar'
 import { ColoredAvatar } from '@/components/ui/colored-avatar'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
+import { fetchApi } from '@/lib/api-client'
 
 const SEARCH_BAR_HEIGHT = 48
 const DM_HEADER_HEIGHT = 48
@@ -35,7 +36,7 @@ export default function DMPage() {
 
         // If not a mock user, try to fetch from API
         logger.info('Fetching user details from API:', { userId })
-        const response = await fetch(`/api/users/${userId}`)
+        const response = await fetchApi(`/api/users/${userId}`)
         if (!response.ok) {
           throw new Error('Failed to fetch user')
         }

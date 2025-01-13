@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Group } from '@/types/models/group'
 import { logger } from '@/lib/logger'
+import { fetchApi } from '@/lib/api-client'
 
 export function useGroups() {
   const [groups, setGroups] = useState<Group[]>([])
@@ -12,39 +13,27 @@ export function useGroups() {
     logger.debug('Fetching groups')
     try {
       setIsLoading(true)
-      const response = await fetch('/api/groups')
+      const response = await fetchApi('/api/groups')
       if (!response.ok) {
         throw new Error(`Failed to fetch groups: ${response.statusText}`)
       }
       const data = await response.json()
-      
-      logger.debug('Groups fetched successfully', {
-        count: data.length,
-        groups: data.map((g: Group) => ({
-          id: g.id,
-          name: g.name,
-          creatorId: g.creatorId
-        }))
-      })
-
       setGroups(data)
     } catch (error) {
-      logger.error('Failed to fetch groups', error)
+      logger.error('Error fetching groups:', error)
       throw error
     } finally {
       setIsLoading(false)
     }
   }
 
-  useEffect(() => {
-    logger.debug('Groups effect triggered', { version })
-    fetchGroups()
-  }, [version])
-
   const refetch = useCallback(() => {
-    logger.debug('Refetching groups')
     setVersion(v => v + 1)
   }, [])
+
+  useEffect(() => {
+    fetchGroups()
+  }, [version])
 
   const removeGroup = useCallback(async (groupId: string) => {
     logger.info('Removing group', { groupId })
@@ -61,7 +50,7 @@ export function useGroups() {
         return newGroups
       })
 
-      const response = await fetch(`/api/groups/${groupId}`, {
+      const response = await fetchApi(`/api/groups/${groupId}`, {
         method: 'DELETE'
       })
 
@@ -103,6 +92,7 @@ export function useGroups() {
     isLoading,
     refetch,
     removeGroup,
-    clearPendingDeletion
+    clearPendingDeletion,
+    pendingDeletions
   }
 } 
