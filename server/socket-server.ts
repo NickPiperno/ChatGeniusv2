@@ -34,15 +34,19 @@ interface ReplyError {
 }
 
 // Load environment variables
-try {
-  dotenv.config({ path: '.env.local' })
-} catch (error) {
-  console.log('[Socket Server] No .env.local found, falling back to process.env')
-}
-
-// Additional fallback for production
 if (process.env.NODE_ENV === 'production') {
   console.log('[Socket Server] Running in production mode, using process.env')
+} else {
+  try {
+    const result = dotenv.config()
+    if (result.error) {
+      console.log('[Socket Server] No .env file found, falling back to process.env')
+    }
+  } catch (error) {
+    console.log('[Socket Server] Error loading .env file, falling back to process.env:', 
+      error instanceof Error ? error.message : 'Unknown error'
+    )
+  }
 }
 
 // Log loaded environment variables (excluding sensitive ones)
