@@ -1,4 +1,3 @@
-import TerserPlugin from 'terser-webpack-plugin';
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
@@ -25,32 +24,7 @@ const nextConfig = {
       exclude: ['error', 'warn'],
     } : false,
   },
-  swcMinify: false,
-  webpack: (config, { dev, isServer }) => {
-    if (!dev) {
-      config.optimization = {
-        ...config.optimization,
-        mergeDuplicateChunks: true,
-        minimize: true,
-        sideEffects: true,
-        minimizer: [
-          new TerserPlugin({
-            parallel: true,
-            terserOptions: {
-              compress: {
-                drop_console: process.env.NODE_ENV === 'production',
-              },
-              format: {
-                comments: false,
-              },
-            },
-            extractComments: false,
-          }),
-        ],
-      };
-    }
-    return config;
-  },
+  swcMinify: true,
 }
 
 export default nextConfig
