@@ -1,0 +1,13 @@
+{
+    "css.validate": true,
+    "css.lint.unknownAtRules": "ignore",
+    "editor.quickSuggestions": {
+      "strings": true
+    },
+    "tailwindCSS.includeLanguages": {
+      "typescript": "javascript",
+      "typescriptreact": "javascript"
+    },
+    "editor.inlineSuggest.enabled": true,
+    "editor.suggest.showStatusBar": true
+}
