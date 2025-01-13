@@ -23,26 +23,27 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: false,
   webpack: (config, { dev, isServer }) => {
-    // Add memory optimizations
     if (!dev) {
       config.optimization = {
         ...config.optimization,
-        mergeDuplicateChunks: true,
         minimize: true,
         minimizer: [
-          '...',
           new TerserPlugin({
+            parallel: true,
             terserOptions: {
               compress: {
                 drop_console: process.env.NODE_ENV === 'production',
               },
+              format: {
+                comments: false,
+              },
             },
+            extractComments: false,
           }),
         ],
-        sideEffects: true,
-      }
+      };
     }
-    return config
+    return config;
   },
 }
 
