@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs'
 import { DynamoDBService } from '@/lib/services/dynamodb'
-import io from '@/server/socket-server'
+import socket from '@/lib/socket-client'
 
 const dynamoDb = new DynamoDBService()
 
@@ -124,97 +124,44 @@ export async function PATCH(
       return new Response('Unauthorized', { status: 401 })
     }
 
-    console.log('[API] Checking group existence and authorization:', {
-      groupId: params.groupId,
-      userId,
-      requestHeaders: Object.fromEntries(request.headers)
+    const group = await dynamoDb.getGroupById(params.groupId)
+    if (!group) {
+      console.log('[API] Group not found:', params.groupId)
+      return new Response('Group not found', { status: 404 })
+    }
+
+    if (group.creatorId !== userId) {
+      console.log('[API] Unauthorized update attempt by non-creator:', userId, 'actual creator:', group.creatorId)
+      return new Response('Unauthorized - only creator can update group', { status: 403 })
+    }
+
+    const data = await request.json()
+    const { name } = data
+
+    if (!name?.trim()) {
+      return new Response('Group name is required', { status: 400 })
+    }
+
+    // Update the group in DynamoDB
+    const updatedGroup = await dynamoDb.updateGroup(params.groupId, {
+      name: name.trim(),
+      updatedAt: new Date().toISOString()
     })
 
-    try {
-      const group = await dynamoDb.getGroupById(params.groupId)
-      if (!group) {
-        console.log('[API] Group not found:', params.groupId)
-        return new Response('Group not found', { status: 404 })
+    // Emit socket event for group name update
+    socket.emit('group_name_updated', { groupId: params.groupId, name: name.trim() })
+
+    return new Response(JSON.stringify(updatedGroup), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json'
       }
-
-      console.log('[API] Authorization check:', {
-        userId,
-        groupCreatorId: group.creatorId,
-        isCreator: group.creatorId === userId,
-        group: JSON.stringify(group, null, 2)
-      })
-
-      if (group.creatorId !== userId) {
-        console.log('[API] Unauthorized update attempt by non-creator:', userId, 'actual creator:', group.creatorId)
-        return new Response('Unauthorized - only creator can update group', { status: 403 })
-      }
-
-      const data = await request.json()
-      const { name } = data
-
-      if (!name?.trim()) {
-        return new Response('Group name is required', { status: 400 })
-      }
-
-      // Update the group in DynamoDB
-      const updatedGroup = await dynamoDb.updateGroup(params.groupId, {
-        name: name.trim(),
-        updatedAt: new Date().toISOString()
-      })
-
-      // Emit socket event for group name update using the existing socket server
-      io.emit('group_name_updated', { groupId: params.groupId, name: name.trim() })
-
-      console.log('[API] Group updated successfully:', {
-        id: updatedGroup.id,
-        name: updatedGroup.name,
-        creatorId: updatedGroup.creatorId
-      })
-
-      return new Response(JSON.stringify(updatedGroup), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      })
-    } catch (error) {
-      console.error('[API] Database operation error:', {
-        operation: 'getGroupById/updateGroup',
-        groupId: params.groupId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        type: error instanceof Error ? error.constructor.name : typeof error
-      })
-      // Return error details in development
-      if (process.env.NODE_ENV === 'development') {
-        return new Response(JSON.stringify({
-          error: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
-          type: error instanceof Error ? error.constructor.name : typeof error
-        }), { 
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        })
-      }
-      return new Response('Database operation failed', { status: 500 })
-    }
+    })
   } catch (error) {
-    console.error('[API] Error in group update:', {
-      groupId: params.groupId,
-      error: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-      type: error instanceof Error ? error.constructor.name : typeof error
-    })
-    // Return error details in development
-    if (process.env.NODE_ENV === 'development') {
-      return new Response(JSON.stringify({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      }), { 
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      })
-    }
-    return new Response('Internal Server Error', { status: 500 })
+    console.error('[API] Error in group update:', error)
+    return new Response(
+      error instanceof Error ? error.message : 'Internal Server Error',
+      { status: 500 }
+    )
   }
 } 
