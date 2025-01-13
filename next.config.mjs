@@ -1,3 +1,5 @@
+import TerserPlugin from 'terser-webpack-plugin';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
@@ -20,11 +22,6 @@ const nextConfig = {
   compress: true,
   reactStrictMode: true,
   swcMinify: false,
-  compiler: {
-    removeConsole: process.env.NODE_ENV === 'production' ? {
-      exclude: ['error', 'warn'],
-    } : false,
-  },
   webpack: (config, { dev, isServer }) => {
     // Add memory optimizations
     if (!dev) {
@@ -32,6 +29,16 @@ const nextConfig = {
         ...config.optimization,
         mergeDuplicateChunks: true,
         minimize: true,
+        minimizer: [
+          '...',
+          new TerserPlugin({
+            terserOptions: {
+              compress: {
+                drop_console: process.env.NODE_ENV === 'production',
+              },
+            },
+          }),
+        ],
         sideEffects: true,
       }
     }
