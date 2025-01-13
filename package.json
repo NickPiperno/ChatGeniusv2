@@ -6,6 +6,8 @@
     "dev": "concurrently \"next dev\" \"tsx watch server/socket-server.ts\"",
     "build": "next build",
     "start": "next start",
+    "socket:prod": "tsx server/socket-server.ts",
+    "socket:dev": "tsx watch server/socket-server.ts",
     "lint": "next lint",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -13,8 +15,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:ci": "jest --ci --coverage && playwright test",
-    "init-db": "node scripts/init-db.js",
-    "socket": "tsx watch server/socket-server.ts"
+    "init-db": "node scripts/init-db.js"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.726.1",
@@ -126,10 +127,6 @@
     "msw": "^2.2.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-<<<<<<< HEAD
-=======
-    "terser-webpack-plugin": "^5.3.11",
->>>>>>> bdeaae8712f3ae791e958f61511642691016c3d1
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
