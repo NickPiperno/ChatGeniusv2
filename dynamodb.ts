@@ -512,27 +512,6 @@ export class DynamoDBService {
   }
 
   // Users
-  async getAllUsers(): Promise<User[]> {
-    console.log('[DynamoDB] Getting all users')
-    
-    try {
-      const result = await dynamodb.send(new ScanCommand({
-        TableName: TableNames.Users,
-        Limit: 50 // Limiting to 50 users for performance
-      }))
-      
-      console.log('[DynamoDB] Users scan result:', {
-        count: result.Count,
-        scannedCount: result.ScannedCount
-      })
-      
-      return (result.Items || []) as User[]
-    } catch (error) {
-      console.error('[DynamoDB] Error getting all users:', error)
-      throw error
-    }
-  }
-
   async getUserById(userId: string): Promise<User | null> {
     console.log('[DynamoDB] Getting user by ID:', userId)
     
@@ -550,6 +529,90 @@ export class DynamoDBService {
       return result.Item as User || null
     } catch (error) {
       console.error('[DynamoDB] Error getting user:', error)
+      throw error
+    }
+  }
+
+  async createUser(user: {
+    id: string
+    clerkId: string
+    name: string
+    username: string
+    email: string
+    avatarUrl?: string
+    createdAt: number
+    preferences: Record<string, any>
+  }): Promise<void> {
+    console.log('[DynamoDB] Creating user:', {
+      id: user.id,
+      name: user.name,
+      username: user.username
+    })
+    
+    try {
+      await dynamodb.send(new PutCommand({
+        TableName: TableNames.Users,
+        Item: user,
+        ConditionExpression: 'attribute_not_exists(id)'
+      }))
+      
+      console.log('[DynamoDB] Successfully created user')
+    } catch (error) {
+      console.error('[DynamoDB] Error creating user:', error)
+      throw error
+    }
+  }
+
+  async updateUser(userId: string, updates: Partial<{
+    name: string
+    username: string
+    email: string
+    avatarUrl: string
+    preferences: Record<string, any>
+  }>): Promise<void> {
+    console.log('[DynamoDB] Updating user:', {
+      userId,
+      updates: JSON.stringify(updates)
+    })
+    
+    try {
+      const updateExpressions: string[] = []
+      const expressionAttributeNames: Record<string, string> = {}
+      const expressionAttributeValues: Record<string, any> = {}
+
+      Object.entries(updates).forEach(([key, value]) => {
+        updateExpressions.push(`#${key} = :${key}`)
+        expressionAttributeNames[`#${key}`] = key
+        expressionAttributeValues[`:${key}`] = value
+      })
+
+      await dynamodb.send(new UpdateCommand({
+        TableName: TableNames.Users,
+        Key: { id: userId },
+        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues
+      }))
+      
+      console.log('[DynamoDB] Successfully updated user')
+    } catch (error) {
+      console.error('[DynamoDB] Error updating user:', error)
+      throw error
+    }
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    console.log('[DynamoDB] Deleting user:', userId)
+    
+    try {
+      await dynamodb.send(new DeleteCommand({
+        TableName: TableNames.Users,
+        Key: { id: userId }
+      }))
+      
+      console.log('[DynamoDB] Successfully deleted user')
+    } catch (error) {
+      console.error('[DynamoDB] Error deleting user:', error)
       throw error
     }
   }
@@ -1203,99 +1266,107 @@ export class DynamoDBService {
     }
   }
 
-  // Users
-  async createUser(user: User): Promise<User> {
-    console.log('[DynamoDB] Creating user:', {
-      id: user.id,
-      name: user.name,
-      displayName: user.displayName
-    })
+  async getAllUsers(): Promise<User[]> {
+    console.log('[DynamoDB] Fetching all users')
     
     try {
-      const item = {
-        ...user,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        metadata: user.metadata || {}
-      }
-
-      await dynamodb.send(new PutCommand({
+      const result = await dynamodb.send(new ScanCommand({
         TableName: TableNames.Users,
-        Item: item,
-        ConditionExpression: 'attribute_not_exists(id)'
       }))
       
-      console.log('[DynamoDB] Successfully created user')
-      return item
+      const users = result.Items?.map(item => ({
+        id: item.id,
+        name: item.name,
+        email: item.email,
+        username: item.username,
+        fullName: item.fullName || item.name,
+        imageUrl: item.avatarUrl || item.imageUrl,
+        status: item.status || 'offline',
+        isOnline: item.isOnline || false,
+        lastActive: item.lastActive ? new Date(item.lastActive) : undefined,
+        preferences: item.preferences || {}
+      })) || []
+
+      console.log('[DynamoDB] Successfully fetched users:', {
+        count: users.length
+      })
+      
+      return users
     } catch (error) {
-      console.error('[DynamoDB] Error creating user:', error)
+      console.error('[DynamoDB] Error fetching users:', error)
       throw error
     }
   }
 
-  async updateUser(userId: string, updates: Partial<User>): Promise<User> {
-    console.log('[DynamoDB] Updating user:', {
-      userId,
-      updates: JSON.stringify(updates)
-    })
+  // Notifications
+  async createNotification(notification: {
+    userId: string
+    type: 'mention' | 'reply' | 'reaction'
+    messageId: string
+    groupId: string
+    actorId: string
+    actorName: string
+    timestamp: number
+    metadata?: Record<string, any>
+  }): Promise<void> {
+    console.log('[DynamoDB] Creating notification:', notification)
+
+    const item = {
+      userId: notification.userId,
+      timestamp: notification.timestamp,
+      type: notification.type,
+      messageId: notification.messageId,
+      groupId: notification.groupId,
+      actorId: notification.actorId,
+      actorName: notification.actorName,
+      metadata: notification.metadata || {},
+      read: false
+    }
+
+    await dynamodb.send(new PutCommand({
+      TableName: TableNames.Notifications,
+      Item: item
+    }))
+  }
+
+  async getUnreadNotifications(userId: string): Promise<any[]> {
+    console.log('[DynamoDB] Getting unread notifications for user:', userId)
     
     try {
-      const updateExpressions: string[] = []
-      const expressionAttributeNames: Record<string, string> = {}
-      const expressionAttributeValues: Record<string, any> = {}
-
-      Object.entries(updates).forEach(([key, value]) => {
-        updateExpressions.push(`#${key} = :${key}`)
-        expressionAttributeNames[`#${key}`] = key
-        expressionAttributeValues[`:${key}`] = value
-      })
-
-      // Always update the updatedAt timestamp
-      updateExpressions.push('#updatedAt = :updatedAt')
-      expressionAttributeNames['#updatedAt'] = 'updatedAt'
-      expressionAttributeValues[':updatedAt'] = new Date().toISOString()
-
-      const result = await dynamodb.send(new UpdateCommand({
-        TableName: TableNames.Users,
-        Key: { id: userId },
-        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
-        ExpressionAttributeNames: expressionAttributeNames,
-        ExpressionAttributeValues: expressionAttributeValues,
-        ReturnValues: 'ALL_NEW'
+      const result = await dynamodb.send(new QueryCommand({
+        TableName: TableNames.Notifications,
+        KeyConditionExpression: 'userId = :userId',
+        FilterExpression: 'read = :read',
+        ExpressionAttributeValues: {
+          ':userId': userId,
+          ':read': false
+        }
       }))
 
-      console.log('[DynamoDB] User updated successfully:', {
-        userId,
-        updatedAttributes: result.Attributes
-      })
-
-      return result.Attributes as User
+      return result.Items || []
     } catch (error) {
-      console.error('[DynamoDB] Error updating user:', {
-        userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      })
+      console.error('[DynamoDB] Error getting unread notifications:', error)
       throw error
     }
   }
 
-  async deleteUser(userId: string): Promise<void> {
-    console.log('[DynamoDB] Deleting user:', userId)
+  async markNotificationAsRead(userId: string, timestamp: number): Promise<void> {
+    console.log('[DynamoDB] Marking notification as read:', { userId, timestamp })
     
     try {
-      await dynamodb.send(new DeleteCommand({
-        TableName: TableNames.Users,
-        Key: { id: userId }
+      await dynamodb.send(new UpdateCommand({
+        TableName: TableNames.Notifications,
+        Key: {
+          userId,
+          timestamp
+        },
+        UpdateExpression: 'SET read = :read',
+        ExpressionAttributeValues: {
+          ':read': true
+        }
       }))
-      
-      console.log('[DynamoDB] Successfully deleted user')
     } catch (error) {
-      console.error('[DynamoDB] Error deleting user:', {
-        userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      })
+      console.error('[DynamoDB] Error marking notification as read:', error)
       throw error
     }
   }
