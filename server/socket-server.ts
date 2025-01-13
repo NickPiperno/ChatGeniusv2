@@ -2,13 +2,7 @@ import { Socket, Server as SocketServer } from 'socket.io'
 import { Message, MessageUpdate, MessageReaction } from '../types/models/message'
 import { DynamoDBMessage } from '../types/models/dynamodb'
 import { logger } from '../lib/logger'
-import dotenv from 'dotenv'
-
-// Load environment variables
-dotenv.config()
-
-const PORT = process.env.SOCKET_PORT || 3001
-const CORS_ORIGIN = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+import * as dotenv from 'dotenv'
 
 interface ReactionData {
   groupId: string
@@ -39,6 +33,48 @@ interface ReplyError {
   data?: any
 }
 
+// Load environment variables
+const fs = require('fs')
+const path = require('path')
+const envPath = path.resolve(process.cwd(), '.env.local')
+console.log('[Socket Server] Loading environment from:', envPath)
+
+try {
+  const content = fs.readFileSync(envPath, 'utf8')
+  const envVars = content.split('\n').reduce((acc: Record<string, string>, line: string) => {
+    const match = line.match(/^([^#\s][^=]+)=(.*)$/)
+    if (match) {
+      const [, key, value] = match
+      acc[key.trim()] = value.trim()
+    }
+    return acc
+  }, {} as Record<string, string>)
+
+  // Set environment variables
+  Object.entries(envVars).forEach((entry: [string, unknown]) => {
+    const [key, value] = entry
+    if (typeof value === 'string') {
+      process.env[key] = value
+    }
+  })
+
+  console.log('[Socket Server] Environment variables loaded:', {
+    count: Object.keys(envVars).length,
+    keys: Object.keys(envVars)
+  })
+} catch (error) {
+  console.error('[Socket Server] Error loading environment:', error)
+  process.exit(1)
+}
+
+// Verify environment variables are set
+console.log('[Socket Server] Environment check:', {
+  hasRegion: !!process.env.AWS_REGION,
+  hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+  hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION
+})
+
 // Server setup
 const { Server } = require('socket.io')
 const { createServer } = require('http')
@@ -48,15 +84,33 @@ const dynamoDb = new DynamoDBService()
 
 // Rest of the server setup
 const httpServer = createServer()
-const io = new SocketServer({
+const io = new SocketServer(httpServer, {
   cors: {
-    origin: CORS_ORIGIN,
-    methods: ['GET', 'POST'],
-    credentials: true
+    origin: process.env.NEXT_PUBLIC_API_URL ? [process.env.NEXT_PUBLIC_API_URL] : [],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization']
   },
-  transports: ['websocket', 'polling'],
-  path: '/socket.io'
+  allowEIO3: true,
+  transports: ['polling', 'websocket'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  maxHttpBufferSize: 1e8
 })
+
+// Extract port from NEXT_PUBLIC_SOCKET_URL or use default
+if (!process.env.NEXT_PUBLIC_SOCKET_URL) {
+  console.error('[Socket Server] NEXT_PUBLIC_SOCKET_URL is not defined');
+  process.exit(1);
+}
+
+const SOCKET_URL = new URL(process.env.NEXT_PUBLIC_SOCKET_URL);
+const PORT = parseInt(SOCKET_URL.port);
+
+if (!PORT) {
+  console.error('[Socket Server] Invalid port in NEXT_PUBLIC_SOCKET_URL');
+  process.exit(1);
+}
 
 httpServer.listen(PORT, () => {
   console.log(`[Socket Server] Server is running on port ${PORT}`);
@@ -130,14 +184,6 @@ io.on('connection', (socket: Socket) => {
       const timestamp = new Date().toISOString()
       const messageId = `${timestamp}-${Math.random().toString(36).substr(2, 9)}`
 
-      // Extract mentions from the message content
-      const mentionRegex = /<span[^>]*data-mention="([^"]*)"[^>]*>@([^<]*)<\/span>/g
-      const mentions: { id: string; label: string }[] = []
-      let match
-      while ((match = mentionRegex.exec(message.content)) !== null) {
-        mentions.push({ id: match[1], label: match[2] })
-      }
-
       const newMessage = {
         id: messageId,
         groupId,
@@ -148,56 +194,17 @@ io.on('connection', (socket: Socket) => {
         timestamp,
         reactions: {},
         attachments: message.attachments || [],
-        metadata: {
-          ...message.metadata || {},
-          mentions: mentions.map(m => m.id)
-        },
+        metadata: message.metadata || {},
         ...(message.parentId && { parentId: message.parentId })
       }
 
       logger.info('[Socket Server] Created new message:', {
         messageId,
         hasParentId: !!newMessage.parentId,
-        parentId: newMessage.parentId,
-        mentionsCount: mentions.length
+        parentId: newMessage.parentId
       })
 
       await dynamoDb.createMessage(newMessage)
-
-      // Create notifications for mentioned users
-      if (mentions.length > 0) {
-        logger.info('[Socket Server] Creating mention notifications:', {
-          messageId,
-          mentions: mentions.map(m => m.label)
-        })
-
-        await Promise.all(mentions.map(mention => 
-          dynamoDb.createNotification({
-            userId: mention.id,
-            type: 'mention',
-            messageId,
-            groupId,
-            actorId: message.senderId,
-            actorName: message.senderName,
-            timestamp: Date.now(),
-            metadata: {
-              messageContent: message.content.substring(0, 100)
-            }
-          })
-        ))
-
-        // Emit notification events to mentioned users
-        mentions.forEach(mention => {
-          io.to(`user:${mention.id}`).emit('notification', {
-            type: 'mention',
-            messageId,
-            groupId,
-            actorId: message.senderId,
-            actorName: message.senderName,
-            content: message.content.substring(0, 100)
-          })
-        })
-      }
 
       // Emit the new message to all clients in the group
       io.to(groupId).emit('message', newMessage)

@@ -6,6 +6,7 @@ export function useGroups() {
   const [groups, setGroups] = useState<Group[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [version, setVersion] = useState(0)
+  const [pendingDeletions, setPendingDeletions] = useState<Set<string>>(new Set())
 
   const fetchGroups = async () => {
     logger.debug('Fetching groups')
@@ -49,6 +50,7 @@ export function useGroups() {
     logger.info('Removing group', { groupId })
     
     try {
+      setPendingDeletions(prev => new Set(prev).add(groupId))
       setGroups(prevGroups => {
         const newGroups = prevGroups.filter(g => g.id !== groupId)
         logger.debug('Groups updated optimistically', {
@@ -88,10 +90,19 @@ export function useGroups() {
     }
   }, [refetch])
 
+  const clearPendingDeletion = useCallback((groupId: string) => {
+    setPendingDeletions(prev => {
+      const next = new Set(prev)
+      next.delete(groupId)
+      return next
+    })
+  }, [])
+
   return {
     groups,
     isLoading,
     refetch,
-    removeGroup
+    removeGroup,
+    clearPendingDeletion
   }
 } 

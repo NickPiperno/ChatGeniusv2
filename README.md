@@ -117,31 +117,28 @@ yarn install
 
 3. Set up environment variables:
 Create a `.env.local` file in the root directory and add the necessary environment variables:
-```
+```env
 # AWS Configuration
-AWS_REGION=
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
+AWS_REGION=<YOUR_AWS_REGION>
+AWS_ACCESS_KEY_ID=<YOUR_AWS_ACCESS_KEY>
+AWS_SECRET_ACCESS_KEY=<YOUR_AWS_SECRET_KEY>
 
 # Clerk Authentication
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
-CLERK_SECRET_KEY=
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<YOUR_CLERK_PUBLISHABLE_KEY>
+CLERK_SECRET_KEY=<YOUR_CLERK_SECRET_KEY>
 
-# API Configuration
-NEXT_PUBLIC_API_URL=http://localhost:3000
-
-# Socket Configuration
-NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
+# API and Socket Configuration
+NEXT_PUBLIC_API_URL=<YOUR_API_URL>      # Your Next.js API server URL
+NEXT_PUBLIC_SOCKET_URL=<YOUR_SOCKET_URL> # Your WebSocket server URL
 ```
 
-4. Run the development server:
+4. Start the servers:
 ```bash
+# Start both Next.js and Socket.IO servers
 npm run dev
-# or
-yarn dev
 ```
 
-Open [your API URL](${process.env.NEXT_PUBLIC_API_URL}) with your browser to see the result.
+The application will be available at the URL specified in `NEXT_PUBLIC_API_URL`.
 
 ## Scripts
 

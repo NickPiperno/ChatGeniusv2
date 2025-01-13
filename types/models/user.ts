@@ -4,6 +4,7 @@ export interface BaseUser {
   name: string
   email: string
   username: string
+  displayName: string
   avatarUrl?: string
   createdAt: number
 }
@@ -14,6 +15,7 @@ export interface User {
   name: string
   email: string
   username?: string
+  displayName: string
   fullName?: string
   imageUrl?: string
   status?: 'online' | 'offline' | 'away' | 'busy'

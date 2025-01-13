@@ -1,9 +1,6 @@
 export interface BaseLog {
-  timestamp: string;
-  level: 'debug' | 'info' | 'warn' | 'error';
+  timestamp?: string;
+  level?: string;
   message: string;
-  service: string;
-  environment: string;
-  version: string;
-  metadata: Record<string, any>;
+  [key: string]: any;
 } 

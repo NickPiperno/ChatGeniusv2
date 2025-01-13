@@ -31,7 +31,8 @@ export async function GET(req: Request) {
     })
     
     return NextResponse.json({
-      username: user?.username || null
+      username: user?.username || null,
+      displayName: user?.displayName || null
     });
   } catch (error) {
     console.error('[USERNAME_GET] Error details:', {

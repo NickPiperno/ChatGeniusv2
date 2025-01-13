@@ -4,7 +4,21 @@ import { DynamoDBService } from '@/lib/services/dynamodb'
 import { v4 as uuidv4 } from 'uuid'
 import { logger } from '@/lib/logger'
 
-const dynamoDb = new DynamoDBService()
+let dynamoDb: DynamoDBService | null = null
+
+function initializeDynamoDB() {
+  if (!dynamoDb) {
+    try {
+      logger.info('Initializing DynamoDB service')
+      dynamoDb = new DynamoDBService()
+      logger.info('DynamoDB service initialized successfully')
+    } catch (error) {
+      logger.error('Failed to initialize DynamoDB service:', error)
+      throw error
+    }
+  }
+  return dynamoDb
+}
 
 // GET /api/groups
 export async function GET(request: NextRequest) {
@@ -12,8 +26,15 @@ export async function GET(request: NextRequest) {
     const { userId } = auth()
     if (!userId) return new NextResponse('Unauthorized', { status: 401 })
 
-    logger.info('Fetching groups for user:', userId)
-    const groups = await dynamoDb.getGroupsByUserId(userId)
+    logger.info('Fetching groups for user', { userId })
+    
+    const db = initializeDynamoDB()
+    if (!db) {
+      logger.error('DynamoDB service not initialized')
+      return new NextResponse('Database service unavailable', { status: 503 })
+    }
+
+    const groups = await db.getGroupsByUserId(userId)
     
     logger.debug('Groups fetched:', groups.map(g => ({
       id: g.id,
@@ -43,7 +64,13 @@ export async function POST(request: NextRequest) {
       return new NextResponse('Unauthorized', { status: 401 })
     }
 
-    logger.debug('Authenticated user:', userId)
+    const db = initializeDynamoDB()
+    if (!db) {
+      logger.error('DynamoDB service not initialized')
+      return new NextResponse('Database service unavailable', { status: 503 })
+    }
+
+    logger.debug('Authenticated user', { userId })
 
     const data = await request.json()
     const { name } = data
@@ -72,7 +99,7 @@ export async function POST(request: NextRequest) {
 
     logger.debug('Group data before save:', group)
 
-    const savedGroup = await dynamoDb.createGroupChat(group)
+    const savedGroup = await db.createGroupChat(group)
     
     logger.info('Group created successfully:', {
       id: savedGroup.id,

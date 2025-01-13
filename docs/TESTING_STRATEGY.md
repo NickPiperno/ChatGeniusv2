@@ -293,7 +293,7 @@ export const options = {
 }
 
 export default function () {
-  const res = http.get(`${process.env.NEXT_PUBLIC_API_URL}/api/messages`)
+  const res = http.get('http://localhost:3000/api/messages')
   
   check(res, {
     'status is 200': (r) => r.status === 200,
@@ -485,7 +485,7 @@ import { PlaywrightTestConfig } from '@playwright/test'
 const config: PlaywrightTestConfig = {
   testDir: './e2e',
   use: {
-    baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
+    baseURL: 'http://localhost:3000',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
   },

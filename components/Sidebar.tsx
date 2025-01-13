@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { Settings, ChevronLeft, ChevronRight } from 'lucide-react'
-import { users } from '@/lib/data'
+import { mockDirectMessages } from '@/lib/data'
 import { useUser } from '@clerk/nextjs'
 import { io } from 'socket.io-client'
 import { EditGroupDialog } from './dialogs/EditGroupDialog'
@@ -21,7 +21,7 @@ import { useSocket } from '@/hooks/realtime'
 import { logger } from '@/lib/logger'
 
 // Add direct message users
-const directMessages = users
+const directMessages = mockDirectMessages
 
 export function Sidebar() {
   const router = useRouter()
@@ -30,7 +30,7 @@ export function Sidebar() {
   const { groups, refetch, removeGroup, clearPendingDeletion } = useGroups()
   const [editingGroup, setEditingGroup] = useState<Group | null>(null)
   const [isCollapsed, setIsCollapsed] = useState(false)
-  const { socket } = useSocket()
+  const socket = useSocket()
 
   const handleCreateGroup = async (name: string) => {
     try {
@@ -77,9 +77,8 @@ export function Sidebar() {
       currentPath: pathname,
       currentGroups: groups?.map(g => ({ id: g.id, name: g.name }))
     })
-
     try {
-      logger.debug('Removing group from local state:', groupId)
+      logger.debug('Removing group from local state:', { groupId })
       removeGroup(groupId)
 
       if (pathname === `/group/${groupId}`) {
@@ -111,7 +110,7 @@ export function Sidebar() {
         throw new Error(errorMessage)
       }
 
-      logger.debug('Server confirmed deletion:', groupId)
+      logger.debug('Server confirmed deletion:', { groupId })
       logger.debug('Syncing with server')
       clearPendingDeletion(groupId)
       await refetch()

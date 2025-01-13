@@ -243,31 +243,6 @@ export function ChatInterface({
     // Join the conversation room
     socket.emit('join_conversation', groupId)
 
-    // Handle notifications
-    const handleNotification = (notification: {
-      type: 'mention' | 'reply' | 'reaction'
-      messageId: string
-      groupId: string
-      actorId: string
-      actorName: string
-      content: string
-    }) => {
-      logger.info('[Chat] Received notification:', {
-        type: notification.type,
-        messageId: notification.messageId,
-        actorName: notification.actorName
-      })
-
-      // Show toast notification
-      toast({
-        title: `New ${notification.type}`,
-        description: `${notification.actorName} ${notification.type === 'mention' ? 'mentioned you' : 'replied to your message'} in a message`,
-        variant: 'default'
-      })
-    }
-
-    socket.on('notification', handleNotification)
-
     // Handle reconnection
     const handleReconnect = (attempt: number) => {
       logger.info('[Chat] Socket reconnected, rejoining room', {
@@ -423,7 +398,6 @@ export function ChatInterface({
     // Cleanup function
     return () => {
       logger.info('[Chat] Cleaning up socket events')
-      socket.off('notification', handleNotification)
       socket.off('message', handleNewMessage)
       socket.off('thread_state', handleThreadState)
       socket.off('reaction_update', handleReactionUpdate)

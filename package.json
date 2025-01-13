@@ -6,8 +6,6 @@
     "dev": "concurrently \"next dev\" \"tsx watch server/socket-server.ts\"",
     "build": "next build",
     "start": "next start",
-    "socket:prod": "tsx server/socket-server.ts",
-    "socket:dev": "tsx watch server/socket-server.ts",
     "lint": "next lint",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -15,7 +13,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:ci": "jest --ci --coverage && playwright test",
-    "init-db": "node scripts/init-db.js"
+    "init-db": "node scripts/init-db.js",
+    "socket": "tsx watch server/socket-server.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.726.1",

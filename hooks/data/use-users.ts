@@ -22,25 +22,15 @@ import { User } from '@/types/models/user'
  * ```
  */
 export function useUsers() {
-  console.log('useUsers hook called')
-  
   const [users, setUsers] = useState<User[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    console.log('useUsers effect running')
     const fetchUsers = async () => {
-      console.log('Fetching users...')
       try {
         const response = await fetch('/api/users')
-        console.log('Users response:', response.status)
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error('Users error:', errorText)
-          throw new Error('Failed to fetch users')
-        }
+        if (!response.ok) throw new Error('Failed to fetch users')
         const data = await response.json()
-        console.log('Users data:', data)
         setUsers(data)
       } catch (error) {
         console.error('Error fetching users:', error)

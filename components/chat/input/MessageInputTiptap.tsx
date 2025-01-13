@@ -1,4 +1,3 @@
-import React from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -72,34 +71,19 @@ interface MentionListRef {
 
 const MentionList = ({ items, command }: MentionListProps) => {
   return (
-    <div className="rounded-md border bg-popover p-1 shadow-md min-w-[200px]">
-      {items.map((item, index) => {
-        // Get display name from available fields
-        const displayName = item.fullName || item.name || item.username || 'Unknown User'
-        const initial = displayName[0].toUpperCase()
-        
-        return (
-          <button
-            key={item.id}
-            className="mention-item flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-            onClick={() => command(item)}
-          >
-            <div className="h-6 w-6 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center">
-              {item.imageUrl ? (
-                <img src={item.imageUrl} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <span className="text-xs text-gray-600">{initial}</span>
-              )}
-            </div>
-            <div className="flex flex-col items-start">
-              <span className="font-medium">{displayName}</span>
-              {item.username && (
-                <span className="text-xs text-muted-foreground">@{item.username}</span>
-              )}
-            </div>
-          </button>
-        )
-      })}
+    <div className="rounded-md border bg-popover p-1 shadow-md">
+      {items.map((item, index) => (
+        <button
+          key={item.id}
+          className="mention-item flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+          onClick={() => command(item)}
+        >
+          <div className="h-6 w-6 rounded-full bg-gray-200 overflow-hidden">
+            {item.imageUrl && <img src={item.imageUrl} alt="" className="h-full w-full object-cover" />}
+          </div>
+          <span>{item.name || item.username}</span>
+        </button>
+      ))}
     </div>
   )
 }
@@ -152,12 +136,6 @@ export function MessageInputTiptap({
         HTMLAttributes: {
           class: 'mention',
         },
-        renderText: ({ node }) => {
-          return `@${(node.attrs as MentionNodeAttrs).label || ''}`
-        },
-        renderHTML: ({ node, HTMLAttributes }) => {
-          return ['span', { ...HTMLAttributes, 'data-mention': node.attrs.id }, `@${node.attrs.label || ''}`]
-        },
         suggestion: {
           items: ({ query }: { query: string }) => {
             return users
@@ -165,10 +143,6 @@ export function MessageInputTiptap({
                 user.name?.toLowerCase().includes(query.toLowerCase()) ||
                 user.username?.toLowerCase().includes(query.toLowerCase())
               )
-              .map(user => ({
-                ...user,
-                label: user.username || user.name
-              }))
               .slice(0, 5)
           },
           render: () => {
@@ -197,7 +171,6 @@ export function MessageInputTiptap({
                   interactive: true,
                   trigger: 'manual',
                   placement: 'bottom-start',
-                  theme: 'mention-popup'
                 })
               },
               
@@ -304,66 +277,112 @@ export function MessageInputTiptap({
   })
 
   const canSendMessage = Boolean(
-    (editor?.getText().trim().length ?? 0) > 0 || uploadedFiles.length > 0
-  ) && !isUploading
+    (!editor?.isEmpty || uploadedFiles.length > 0) && !isUploading
+  )
 
   // Add debug log for send button state
   console.log('[MessageInput] Send button state:', {
     canSend: canSendMessage,
     textLength: editor?.getText().trim().length ?? 0,
     filesLength: uploadedFiles.length,
-    isUploading
+    isUploading,
+    isEmpty: editor?.isEmpty
   })
 
   const handleSend = useCallback(async () => {
     if (!editor) return
-    
-    setIsUploading(true)
+
     try {
-      const cleanContent = editor.getText().trim()
-      if (!cleanContent && uploadedFiles.length === 0) return
+      setIsUploading(true)
+      const content = editor.getHTML()
+      const cleanContent = content.replace(/<p[^>]*><br><\/p>/g, '').trim()
 
-      let attachments: { id: string; name: string; url: string; type: 'document' | 'image' }[] = []
+      // Only check for empty content if there are no files
+      if (!cleanContent && uploadedFiles.length === 0) {
+        console.log('[MessageInput] No content and no files, returning')
+        return
+      }
 
-      // Upload files if any
+      console.log('[MessageInput] Starting message send with:', {
+        contentLength: cleanContent.length,
+        filesCount: uploadedFiles.length
+      })
+
+      // Upload files first if any
+      let attachments: Array<{
+        id: string
+        name: string
+        url: string
+        type: 'document' | 'image'
+      }> = []
+
       if (uploadedFiles.length > 0) {
         const formData = new FormData()
-        uploadedFiles.forEach(file => {
-          formData.append('file', file)
-        })
-        if (groupId) {
-          formData.append('groupId', groupId)
-        }
+        
+        // Change: Upload each file individually and collect responses
+        const uploadPromises = uploadedFiles.map(async (file) => {
+          const singleFileForm = new FormData()
+          singleFileForm.append('file', file)  // Changed from 'files' to 'file'
+          if (groupId) {
+            singleFileForm.append('groupId', groupId)
+          }
 
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-          headers: {
-            // Don't set Content-Type header - browser will set it with boundary for FormData
-          },
-        })
-
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error('[MessageInput] Upload failed:', {
-            status: response.status,
-            statusText: response.statusText,
-            error: errorText
+          console.log('[MessageInput] Uploading file:', {
+            name: file.name,
+            type: file.type,
+            size: file.size
           })
-          throw new Error(`Failed to upload files: ${response.statusText}`)
-        }
 
-        attachments = await response.json()
-        console.log('[MessageInput] Files uploaded successfully:', attachments)
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: singleFileForm,
+          })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            console.error('[MessageInput] Upload failed for file:', {
+              fileName: file.name,
+              status: response.status,
+              statusText: response.statusText,
+              error: errorText
+            })
+            throw new Error(`Failed to upload file ${file.name}: ${response.statusText}`)
+          }
+
+          const responseData = await response.json()
+          console.log('[MessageInput] Upload response for file:', file.name, responseData)
+
+          return responseData[0]  // The API returns an array with a single file
+        })
+
+        try {
+          const uploadResults = await Promise.all(uploadPromises)
+          attachments = uploadResults.map(file => ({
+            id: file.id,
+            name: file.name,
+            url: file.url,
+            type: file.type.startsWith('image/') ? 'image' : 'document' as const
+          }))
+          console.log('[MessageInput] All files uploaded successfully:', attachments)
+        } catch (error) {
+          console.error('[MessageInput] Error uploading files:', error)
+          throw error
+        }
       }
 
       // Send message with file URLs
+      console.log('[MessageInput] Sending message with attachments:', {
+        contentLength: cleanContent.length,
+        attachmentsCount: attachments.length
+      })
       await onSendMessage(cleanContent, attachments)
       
       // Clear the editor and reset files
       editor.commands.clearContent()
       setUploadedFiles([])
       setIsEmojiOpen(false)
+      
+      console.log('[MessageInput] Message sent successfully')
     } catch (error) {
       console.error('[MessageInput] Error sending message:', error)
       toast({
@@ -378,6 +397,7 @@ export function MessageInputTiptap({
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || [])
+    console.log('[MessageInput] Files selected:', selectedFiles)
     setUploadedFiles(prev => [...prev, ...selectedFiles])
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -385,6 +405,7 @@ export function MessageInputTiptap({
   }
 
   const handleRemoveFile = (index: number) => {
+    console.log('[MessageInput] Removing file at index:', index)
     setUploadedFiles(files => files.filter((_, i) => i !== index))
   }
 
@@ -402,6 +423,7 @@ export function MessageInputTiptap({
     e.preventDefault()
     setIsDragging(false)
     const droppedFiles = Array.from(e.dataTransfer.files)
+    console.log('[MessageInput] Files dropped:', droppedFiles)
     setUploadedFiles(prev => [...prev, ...droppedFiles])
   }
 
@@ -416,16 +438,19 @@ export function MessageInputTiptap({
   const isMac = typeof window !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
   const modKey = isMac ? '⌘' : 'Ctrl'
 
-  const FormatButton = React.forwardRef<
-    HTMLButtonElement,
-    {
-      icon: LucideIcon
-      isActive?: boolean
-      onClick: () => void
-      tooltip: string
-      shortcut?: string
-    }
-  >(({ icon: Icon, isActive, onClick, tooltip, shortcut }, ref) => {
+  function FormatButton({ 
+    icon: Icon, 
+    isActive, 
+    onClick, 
+    tooltip,
+    shortcut 
+  }: { 
+    icon: LucideIcon
+    isActive?: boolean
+    onClick: () => void
+    tooltip: string
+    shortcut?: string
+  }) {
     const isFormattingButton = !['Attach files', 'Add emoji'].includes(tooltip)
 
     const handleClick = (e: React.MouseEvent) => {
@@ -447,7 +472,6 @@ export function MessageInputTiptap({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              ref={ref}
               variant="ghost"
               size="icon"
               className={cn(
@@ -466,9 +490,7 @@ export function MessageInputTiptap({
         </Tooltip>
       </TooltipProvider>
     )
-  })
-
-  FormatButton.displayName = 'FormatButton'
+  }
 
   const handleBold = useCallback(() => {
     if (!editor) return

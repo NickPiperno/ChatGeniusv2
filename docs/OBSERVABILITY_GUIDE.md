@@ -115,12 +115,12 @@ describe('Structured Logging', () => {
   it('should handle sensitive data redaction', () => {
     const logger = createLogger();
     const logEntry = logger.info('User authenticated', {
-      email: 'user@example.com',
+      email: '<MASKED_EMAIL>',
       password: 'secret123'
     });
     
     expect(logEntry.metadata.password).toBe('[REDACTED]');
-    expect(logEntry.metadata.email).toBe('u***@example.com');
+    expect(logEntry.metadata.email).toBe('<MASKED_EMAIL>');
   });
 });
 ```

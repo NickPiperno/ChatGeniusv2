@@ -6,18 +6,19 @@ import { Button } from '@/components/ui/button'
 import { Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DirectMessageCard } from './DirectMessageCard'
-import { DirectMessage } from '@/types/models/channel'
+import type { DirectMessage } from '@/types/models/channel'
 import { CreateDMDialog } from '@/components/dialogs/CreateDMDialog'
+import { mockDirectMessages } from '@/lib/data'
 
 interface DirectMessageListProps {
   isCollapsed?: boolean
-  directMessages: DirectMessage[]
+  directMessages?: DirectMessage[]
   onCreateDM?: (userId: string) => Promise<void>
 }
 
 export function DirectMessageList({ 
   isCollapsed = false,
-  directMessages,
+  directMessages = mockDirectMessages,
   onCreateDM
 }: DirectMessageListProps) {
   const router = useRouter()
@@ -40,7 +41,7 @@ export function DirectMessageList({
         </div>
       )}
       <ScrollArea className="max-h-[30vh]">
-        {directMessages.map((dm) => (
+        {directMessages?.map((dm) => (
           <DirectMessageCard
             key={dm.id}
             directMessage={dm}

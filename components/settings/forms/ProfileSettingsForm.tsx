@@ -12,32 +12,37 @@ import { LoadingSpinner } from "@/components/ui/feedback/LoadingSpinner"
 export function ProfileSettingsForm() {
   const { user } = useUser()
   const [username, setUsername] = useState('')
-  const [isEditing, setIsEditing] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
+  const [displayName, setDisplayName] = useState('')
+  const [isEditingUsername, setIsEditingUsername] = useState(false)
+  const [isEditingDisplayName, setIsEditingDisplayName] = useState(false)
+  const [isSavingUsername, setIsSavingUsername] = useState(false)
+  const [isSavingDisplayName, setIsSavingDisplayName] = useState(false)
 
-  // Fetch current username from our database
+  // Fetch current username and display name from our database
   useEffect(() => {
-    const fetchUsername = async () => {
+    const fetchUserData = async () => {
       try {
         const response = await fetch(`/api/user/username?userId=${user?.id}`)
         if (response.ok) {
           const data = await response.json()
           setUsername(data.username || user?.username || '')
+          setDisplayName(data.displayName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || '')
         }
       } catch (error) {
-        console.error('Error fetching username:', error)
+        console.error('Error fetching user data:', error)
         setUsername(user?.username || '')
+        setDisplayName(`${user?.firstName || ''} ${user?.lastName || ''}`.trim() || '')
       }
     }
 
     if (user?.id) {
-      fetchUsername()
+      fetchUserData()
     }
-  }, [user?.id, user?.username])
+  }, [user?.id, user?.username, user?.firstName, user?.lastName])
 
-  const handleSave = async () => {
+  const handleSaveUsername = async () => {
     if (!username.trim()) return
-    setIsSaving(true)
+    setIsSavingUsername(true)
     
     try {
       const response = await fetch('/api/user/update-username', {
@@ -56,13 +61,44 @@ export function ProfileSettingsForm() {
         throw new Error(error)
       }
 
-      setIsEditing(false)
+      setIsEditingUsername(false)
       toast.success('Username updated successfully')
     } catch (error) {
       console.error('Error updating username:', error)
       toast.error(error instanceof Error ? error.message : 'Failed to update username')
     } finally {
-      setIsSaving(false)
+      setIsSavingUsername(false)
+    }
+  }
+
+  const handleSaveDisplayName = async () => {
+    if (!displayName.trim()) return
+    setIsSavingDisplayName(true)
+    
+    try {
+      const response = await fetch('/api/user/update-displayname', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user?.id,
+          displayName: displayName,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.text()
+        throw new Error(error)
+      }
+
+      setIsEditingDisplayName(false)
+      toast.success('Display name updated successfully')
+    } catch (error) {
+      console.error('Error updating display name:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to update display name')
+    } finally {
+      setIsSavingDisplayName(false)
     }
   }
 
@@ -83,10 +119,10 @@ export function ProfileSettingsForm() {
             <div>
               <h3 className="text-lg font-semibold mb-2">Username</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                This is your public display name.
+                This is your unique identifier.
               </p>
               <div className="flex items-center gap-4">
-                {isEditing ? (
+                {isEditingUsername ? (
                   <>
                     <Input
                       value={username}
@@ -95,18 +131,18 @@ export function ProfileSettingsForm() {
                       className="max-w-sm"
                     />
                     <Button 
-                      onClick={handleSave}
-                      disabled={isSaving || !username.trim()}
+                      onClick={handleSaveUsername}
+                      disabled={isSavingUsername || !username.trim()}
                     >
-                      {isSaving ? (
+                      {isSavingUsername ? (
                         <LoadingSpinner size="sm" className="mr-2" />
                       ) : null}
-                      {isSaving ? 'Saving...' : 'Save'}
+                      {isSavingUsername ? 'Saving...' : 'Save'}
                     </Button>
                     <Button
                       variant="ghost"
                       onClick={() => {
-                        setIsEditing(false)
+                        setIsEditingUsername(false)
                         setUsername(user?.username || '')
                       }}
                     >
@@ -118,7 +154,57 @@ export function ProfileSettingsForm() {
                     <span className="text-muted-foreground">{username || 'No username set'}</span>
                     <Button
                       variant="outline"
-                      onClick={() => setIsEditing(true)}
+                      onClick={() => setIsEditingUsername(true)}
+                    >
+                      Edit
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Display Name Section */}
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold mb-2">Display Name</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                This is how you'll appear to others.
+              </p>
+              <div className="flex items-center gap-4">
+                {isEditingDisplayName ? (
+                  <>
+                    <Input
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Enter your display name"
+                      className="max-w-sm"
+                    />
+                    <Button 
+                      onClick={handleSaveDisplayName}
+                      disabled={isSavingDisplayName || !displayName.trim()}
+                    >
+                      {isSavingDisplayName ? (
+                        <LoadingSpinner size="sm" className="mr-2" />
+                      ) : null}
+                      {isSavingDisplayName ? 'Saving...' : 'Save'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setIsEditingDisplayName(false)
+                        setDisplayName(`${user?.firstName || ''} ${user?.lastName || ''}`.trim() || '')
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-muted-foreground">{displayName || 'No display name set'}</span>
+                    <Button
+                      variant="outline"
+                      onClick={() => setIsEditingDisplayName(true)}
                     >
                       Edit
                     </Button>

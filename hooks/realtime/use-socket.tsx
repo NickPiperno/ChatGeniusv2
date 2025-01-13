@@ -1,9 +1,8 @@
 'use client'
 
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import { Socket } from 'socket.io-client'
+import { Socket, io } from 'socket.io-client'
 import { useToast } from '@/components/ui/use-toast'
-import socket from '@/lib/socket-client'
 
 interface SocketContextType {
   socket: Socket | null
@@ -15,19 +14,36 @@ const SocketContext = createContext<SocketContextType>({
   isConnected: false
 })
 
+export function useSocket() {
+  return useContext(SocketContext)
+}
+
 export function SocketProvider({ children }: { children: React.ReactNode }): JSX.Element {
+  const [socket, setSocket] = useState<Socket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const { toast } = useToast()
   const [connectionAttempts, setConnectionAttempts] = useState(0)
 
   useEffect(() => {
     console.log('[Socket Hook] Initializing socket connection')
+    
+    const socketInstance = io(process.env.NEXT_PUBLIC_SOCKET_URL!, {
+      transports: ['polling', 'websocket'],
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 30000,
+      withCredentials: true,
+      forceNew: true,
+      path: '/socket.io'
+    })
 
-    socket.on('connect', () => {
+    socketInstance.on('connect', () => {
       const connectionInfo = {
-        id: socket.id,
-        connected: socket.connected,
-        transport: socket.io.engine?.transport?.name
+        id: socketInstance.id,
+        connected: socketInstance.connected,
+        transport: socketInstance.io.engine?.transport?.name
       }
       console.log('[Socket Hook] Connected:', connectionInfo)
       
@@ -43,12 +59,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }): JSX
       }
     })
 
-    socket.on('disconnect', (reason) => {
+    socketInstance.on('disconnect', (reason) => {
       console.log('[Socket Hook] Disconnected:', {
         reason,
         wasConnected: isConnected,
         attempts: connectionAttempts,
-        transport: socket.io.engine?.transport?.name
+        transport: socketInstance.io.engine?.transport?.name
       })
       
       setIsConnected(false)
@@ -63,11 +79,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }): JSX
       }
     })
 
-    socket.on('reconnect_attempt', (attempt) => {
+    socketInstance.on('reconnect_attempt', (attempt) => {
       console.log('[Socket Hook] Reconnection attempt:', {
         attempt,
-        maxAttempts: socket.io.opts.reconnectionAttempts,
-        transport: socket.io.engine?.transport?.name
+        maxAttempts: socketInstance.io.opts.reconnectionAttempts,
+        transport: socketInstance.io.engine?.transport?.name
       })
       
       setConnectionAttempts(attempt)
@@ -81,12 +97,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }): JSX
       }
     })
 
-    socket.on('connect_error', (error) => {
+    socketInstance.on('connect_error', (error) => {
       console.error('[Socket Hook] Connection error:', {
         message: error.message,
         name: error.name,
         stack: error.stack,
-        transport: socket.io.engine?.transport?.name
+        transport: socketInstance.io.engine?.transport?.name
       })
       
       setIsConnected(false)
@@ -101,26 +117,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }): JSX
       }
     })
 
+    setSocket(socketInstance)
+
     return () => {
       console.log('[Socket Hook] Cleaning up socket connection')
-      socket.off('connect')
-      socket.off('disconnect')
-      socket.off('reconnect_attempt')
-      socket.off('connect_error')
+      socketInstance.disconnect()
     }
-  }, [connectionAttempts, toast, isConnected])
+  }, [connectionAttempts, toast])
 
   return (
     <SocketContext.Provider value={{ socket, isConnected }}>
       {children}
     </SocketContext.Provider>
   )
-}
-
-export function useSocket() {
-  const context = useContext(SocketContext)
-  if (!context) {
-    throw new Error('useSocket must be used within a SocketProvider')
-  }
-  return context
 } 

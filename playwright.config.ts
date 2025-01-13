@@ -3,7 +3,7 @@ import { PlaywrightTestConfig } from '@playwright/test'
 const config: PlaywrightTestConfig = {
   testDir: './e2e',
   use: {
-    baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
+    baseURL: process.env.NEXT_PUBLIC_API_URL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
   },
@@ -23,7 +23,7 @@ const config: PlaywrightTestConfig = {
   ],
   webServer: {
     command: 'npm run dev',
-    url: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
+    url: process.env.NEXT_PUBLIC_API_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000
   },

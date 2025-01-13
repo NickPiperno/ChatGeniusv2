@@ -138,34 +138,19 @@ function ChatRoom() {
 **Test Coverage Requirements:**
 ```typescript
 describe('useWebSocket', () => {
-  it('should establish connection', async () => {
-    const { result } = renderHook(() => useWebSocket('ws://test'));
-    await waitFor(() => {
-      expect(result.current.connectionStatus).toBe('connected');
-    });
+  it('should connect successfully', () => {
+    const { result } = renderHook(() => useWebSocket('<WEBSOCKET_URL>'));
+    expect(result.current.connected).toBe(true);
   });
 
-  it('should handle messages', async () => {
-    const { result } = renderHook(() => useWebSocket('ws://test'));
-    const mockMessage = { content: 'test' };
-    
-    // Simulate message
-    mockWebSocket.emit('message', JSON.stringify(mockMessage));
-    
-    await waitFor(() => {
-      expect(result.current.messages).toContainEqual(mockMessage);
-    });
+  it('should handle reconnection', () => {
+    const { result } = renderHook(() => useWebSocket('<WEBSOCKET_URL>'));
+    // Test reconnection logic
   });
 
-  it('should handle disconnection', async () => {
-    const { result } = renderHook(() => useWebSocket('ws://test'));
-    
-    // Simulate disconnect
-    mockWebSocket.close();
-    
-    await waitFor(() => {
-      expect(result.current.connectionStatus).toBe('disconnected');
-    });
+  it('should handle errors', () => {
+    const { result } = renderHook(() => useWebSocket('<WEBSOCKET_URL>'));
+    // Test error handling
   });
 });
 ```
