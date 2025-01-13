@@ -34,38 +34,19 @@ interface ReplyError {
 }
 
 // Load environment variables
-const fs = require('fs')
-const path = require('path')
-const envPath = path.resolve(process.cwd(), '.env.local')
-console.log('[Socket Server] Loading environment from:', envPath)
+dotenv.config({ path: '.env.local' })
 
-try {
-  const content = fs.readFileSync(envPath, 'utf8')
-  const envVars = content.split('\n').reduce((acc: Record<string, string>, line: string) => {
-    const match = line.match(/^([^#\s][^=]+)=(.*)$/)
-    if (match) {
-      const [, key, value] = match
-      acc[key.trim()] = value.trim()
-    }
-    return acc
-  }, {} as Record<string, string>)
+// Log loaded environment variables (excluding sensitive ones)
+const envVars = Object.keys(process.env).filter(key => 
+  !key.includes('SECRET') && 
+  !key.includes('KEY') && 
+  !key.includes('PASSWORD')
+)
 
-  // Set environment variables
-  Object.entries(envVars).forEach((entry: [string, unknown]) => {
-    const [key, value] = entry
-    if (typeof value === 'string') {
-      process.env[key] = value
-    }
-  })
-
-  console.log('[Socket Server] Environment variables loaded:', {
-    count: Object.keys(envVars).length,
-    keys: Object.keys(envVars)
-  })
-} catch (error) {
-  console.error('[Socket Server] Error loading environment:', error)
-  process.exit(1)
-}
+console.log('[Socket Server] Environment variables loaded:', {
+  count: envVars.length,
+  keys: envVars
+})
 
 // Verify environment variables are set
 console.log('[Socket Server] Environment check:', {
