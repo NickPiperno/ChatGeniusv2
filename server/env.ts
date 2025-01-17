@@ -1,44 +1,41 @@
-import * as dotenv from 'dotenv'
-import { resolve } from 'path'
+import { config } from 'dotenv'
+import { z } from 'zod'
 
-// Load environment variables immediately
-const envPath = resolve(process.cwd(), '.env')
-const result = dotenv.config({ path: envPath })
-
-if (result.error) {
-  console.error('Error loading .env file:', result.error)
-  process.exit(1)
+// Only try to load .env file in development
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    config()
+  } catch (error) {
+    console.log('No .env file found in development mode')
+  }
 }
 
-// Verify required environment variables
-const requiredEnvVars = [
-  'NEXT_PUBLIC_API_URL',
-  'AWS_REGION',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
-  'DYNAMODB_MESSAGES_TABLE',
-  'DYNAMODB_GROUPS_TABLE'
-]
+const envSchema = z.object({
+  // App Configuration
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  NEXT_PUBLIC_API_URL: z.string().url(),
+  PORT: z.string().default('3000'),
 
-let missingVars = false
-requiredEnvVars.forEach(varName => {
-  if (!process.env[varName]) {
-    console.error(`Required environment variable ${varName} is not defined`)
-    missingVars = true
-  }
+  // MongoDB Configuration
+  MONGODB_URI: z.string(),
+
+  // AWS Configuration
+  AWS_REGION: z.string(),
+  AWS_ACCESS_KEY_ID: z.string(),
+  AWS_SECRET_ACCESS_KEY: z.string(),
+
+  // Clerk Authentication
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string(),
+  CLERK_SECRET_KEY: z.string(),
 })
 
-if (missingVars) {
-  process.exit(1)
+// Validate environment variables
+let validatedEnv
+try {
+  validatedEnv = envSchema.parse(process.env)
+} catch (error) {
+  console.error('Environment validation failed:', error)
+  throw new Error('Invalid environment configuration')
 }
 
-// Export environment variables for type safety
-export const env = {
-  NODE_ENV: process.env.NODE_ENV || 'development',
-  AWS_REGION: process.env.AWS_REGION!,
-  AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID!,
-  AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY!,
-  DYNAMODB_MESSAGES_TABLE: process.env.DYNAMODB_MESSAGES_TABLE!,
-  DYNAMODB_GROUPS_TABLE: process.env.DYNAMODB_GROUPS_TABLE!,
-  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL!
-} as const 
+export default validatedEnv 
