@@ -1714,21 +1714,41 @@ export class DynamoDBService {
 
   private async testConnection(): Promise<boolean> {
     try {
+      const startTime = Date.now();
       logger.info('[DynamoDB] Starting connection test with config:', {
         region: this.clientConfig?.region,
         hasCredentials: !!this.clientConfig?.credentials,
         tables: {
           messages: TableNames.Messages,
           groups: TableNames.GroupChats
+        },
+        networkInfo: {
+          railway: {
+            region: process.env.RAILWAY_REGION,
+            environment: process.env.RAILWAY_ENVIRONMENT_NAME,
+            projectId: process.env.RAILWAY_PROJECT_ID,
+            serviceId: process.env.RAILWAY_SERVICE_ID
+          }
         }
       });
 
       // Try to describe the Messages table as a connection test
-      await this.dynamodb!.send(new DescribeTableCommand({
+      const result = await this.dynamodb!.send(new DescribeTableCommand({
         TableName: TableNames.Messages
       }));
 
-      logger.info('[DynamoDB] Connection test successful');
+      const endTime = Date.now();
+      const latency = endTime - startTime;
+
+      logger.info('[DynamoDB] Connection test successful:', {
+        latencyMs: latency,
+        tableInfo: {
+          tableName: result.Table?.TableName,
+          tableStatus: result.Table?.TableStatus,
+          itemCount: result.Table?.ItemCount,
+          tableSizeBytes: result.Table?.TableSizeBytes
+        }
+      });
       return true;
     } catch (error) {
       logger.error('[DynamoDB] Connection test failed:', {
@@ -1736,6 +1756,14 @@ export class DynamoDBService {
         errorName: error instanceof Error ? error.name : 'Unknown',
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
         errorStack: error instanceof Error ? error.stack : undefined,
+        networkInfo: {
+          railway: {
+            region: process.env.RAILWAY_REGION,
+            environment: process.env.RAILWAY_ENVIRONMENT_NAME,
+            projectId: process.env.RAILWAY_PROJECT_ID,
+            serviceId: process.env.RAILWAY_SERVICE_ID
+          }
+        },
         config: {
           region: this.clientConfig?.region,
           hasCredentials: !!this.clientConfig?.credentials,
