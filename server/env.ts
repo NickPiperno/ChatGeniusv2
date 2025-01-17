@@ -10,10 +10,23 @@ if (process.env.NODE_ENV !== 'production') {
   }
 }
 
+// Helper function to validate URL or Railway variable
+function isValidUrlOrRailwayVar(url: string) {
+  if (url.includes('${RAILWAY')) return true
+  try {
+    new URL(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
 const envSchema = z.object({
   // App Configuration
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  NEXT_PUBLIC_API_URL: z.string().url(),
+  NEXT_PUBLIC_API_URL: z.string().refine((url) => isValidUrlOrRailwayVar(url), {
+    message: "NEXT_PUBLIC_API_URL must be a valid URL or Railway variable"
+  }),
   PORT: z.string().default('3000'),
 
   // MongoDB Configuration
@@ -39,7 +52,14 @@ let validatedEnv
 try {
   validatedEnv = envSchema.parse(process.env)
 } catch (error) {
-  console.error('Environment validation failed:', error)
+  console.error('Environment validation failed. Details:')
+  if (error instanceof z.ZodError) {
+    error.errors.forEach((err) => {
+      console.error(`- ${err.path.join('.')}: ${err.message}`)
+    })
+  } else {
+    console.error(error)
+  }
   throw new Error('Invalid environment configuration')
 }
 

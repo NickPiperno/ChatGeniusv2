@@ -11,7 +11,7 @@ COPY . .
 
 # Set production mode and build-time environment variables
 ENV NODE_ENV=production \
-    NEXT_PUBLIC_API_URL=http://localhost:3000 \
+    NEXT_PUBLIC_API_URL=${RAILWAY_STATIC_URL} \
     AWS_REGION=us-east-2 \
     AWS_ACCESS_KEY_ID=dummy-build-key \
     AWS_SECRET_ACCESS_KEY=dummy-build-secret \
