@@ -3,12 +3,27 @@ import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamoDb = new DynamoDBService()
+let dynamoDb: DynamoDBService | null = null;
+
+try {
+  dynamoDb = new DynamoDBService()
+} catch (error) {
+  logger.error('[DynamoDB] Failed to initialize service:', error)
+}
 
 export const runtime = 'nodejs'
 
 export async function GET() {
   try {
+    // Check if DynamoDB is initialized
+    if (!dynamoDb) {
+      logger.error('[GROUPS_GET] DynamoDB service not initialized')
+      return NextResponse.json({ 
+        error: 'Database service unavailable',
+        details: 'Please check AWS credentials and configuration'
+      }, { status: 503 })
+    }
+
     const session = await getSession()
     if (!session?.user?.sub) {
       logger.warn('Unauthorized groups fetch attempt - no user ID')
@@ -17,7 +32,7 @@ export async function GET() {
     const userId = session.user.sub
 
     logger.info('Fetching groups for user', { userId })
-    const groups = await dynamoDb.getGroupsByUserId(userId)
+    const groups = await dynamoDb!.getGroupsByUserId(userId)
     
     logger.debug('Groups fetched:', groups.map(g => ({
       id: g.id,
@@ -49,23 +64,26 @@ export async function GET() {
       }
     })
     
-    // Always return detailed error in development or on Railway for debugging
-    if (process.env.NODE_ENV === 'development' || process.env.RAILWAY_ENVIRONMENT_NAME) {
-      return NextResponse.json({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        type: error instanceof Error ? error.constructor.name : typeof error
-      }, { status: 500 })
-    }
-    
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    // Return a more specific error message
+    return NextResponse.json({
+      error: 'Database operation failed',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      type: error instanceof Error ? error.constructor.name : typeof error
+    }, { status: 500 })
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   try {
-    logger.debug('Starting group creation')
-    
+    // Check if DynamoDB is initialized
+    if (!dynamoDb) {
+      logger.error('[GROUPS_POST] DynamoDB service not initialized')
+      return NextResponse.json({ 
+        error: 'Database service unavailable',
+        details: 'Please check AWS credentials and configuration'
+      }, { status: 503 })
+    }
+
     const session = await getSession()
     if (!session?.user?.sub) {
       logger.warn('Unauthorized group creation attempt - no user ID')
@@ -73,63 +91,30 @@ export async function POST(req: Request) {
     }
     const userId = session.user.sub
 
-    logger.debug('Authenticated user', { userId })
+    const body = await request.json()
+    const { name } = body
 
-    const { name } = await req.json()
-    if (!name?.trim()) {
-      logger.warn('Invalid group name:', { name })
+    if (!name) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 })
     }
 
-    // Get all users to add to the group
-    logger.info('Fetching all users for group creation')
-    const allUsers = await dynamoDb.getAllUsers()
-    const userIds = allUsers.map(user => user.id)
-
-    logger.info('Creating group:', {
-      name: name.trim(),
-      userId,
-      memberCount: userIds.length,
-      timestamp: new Date().toISOString()
-    })
-
-    const group = {
+    logger.info('Creating group', { name, userId })
+    const group = await dynamoDb!.createGroupChat({
       id: crypto.randomUUID(),
-      name: name.trim(),
-      type: 'group',
-      userId: userId,
-      members: userIds, // Add all users as members
+      name,
+      userId,
+      members: [userId], // Initially just the creator
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      isPrivate: false
-    }
-
-    logger.debug('Group data before save:', {
-      ...group,
-      memberCount: group.members.length
+      updatedAt: new Date().toISOString()
     })
 
-    const savedGroup = await dynamoDb.createGroupChat(group)
-    
-    logger.info('Group created successfully:', {
-      id: savedGroup.id,
-      name: savedGroup.name,
-      userId: savedGroup.userId,
-      memberCount: savedGroup.members?.length || 0
-    })
-
-    return NextResponse.json(savedGroup)
+    return NextResponse.json(group)
   } catch (error) {
     logger.error('[GROUPS_POST] Error:', error)
-    
-    if (process.env.NODE_ENV === 'development') {
-      return NextResponse.json({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      }, { status: 500 })
-    }
-    
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ 
+      error: 'Failed to create group',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 })
   }
 }
 
@@ -143,12 +128,12 @@ export async function PATCH() {
 
     // Get all users
     logger.info('Fetching all users')
-    const allUsers = await dynamoDb.getAllUsers()
+    const allUsers = await dynamoDb!.getAllUsers()
     const userIds = allUsers.map(user => user.id)
 
     // Get all groups
     logger.info('Fetching all groups')
-    const allGroups = await dynamoDb.getAllGroups()
+    const allGroups = await dynamoDb!.getAllGroups()
 
     // Update each group to include all users
     logger.info('Updating all groups with all users:', {
@@ -158,7 +143,7 @@ export async function PATCH() {
 
     const updates = await Promise.all(
       allGroups.map(async group => {
-        const updatedGroup = await dynamoDb.updateGroup(group.id, {
+        const updatedGroup = await dynamoDb!.updateGroup(group.id, {
           members: userIds,
           updatedAt: new Date().toISOString()
         })
