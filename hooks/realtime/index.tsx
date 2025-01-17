@@ -78,19 +78,18 @@ export function SocketProvider({ children }: SocketProviderProps) {
 
   useEffect(() => {
     // Get the base URL for the WebSocket connection
-    const baseUrl = process.env.NODE_ENV === 'production'
-      ? window.location.origin.replace('http', 'ws').replace('https', 'wss')  // Ensure WSS in production
-      : 'ws://localhost:3000'
+    const baseUrl = window.location.origin
 
     console.log('[Socket] Connecting to:', baseUrl)
     const newSocket = io(baseUrl, {
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       path: '/api/socketio',
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       autoConnect: true,
       forceNew: true,
-      secure: process.env.NODE_ENV === 'production'
+      withCredentials: true,
+      timeout: 60000
     })
 
     newSocket.on('connect', () => {
