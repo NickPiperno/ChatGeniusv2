@@ -34,18 +34,7 @@ console.log('[DynamoDB] Environment check:', {
   groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats'
 })
 
-// Validate required credentials
-if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
-  logger.error('[DynamoDB] Missing required AWS credentials:', {
-    hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-    hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-    hasRegion: !!process.env.AWS_REGION,
-    nodeEnv: process.env.NODE_ENV,
-    isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME
-  })
-  throw new Error('Missing required AWS credentials or region')
-}
-
+// Move credential validation to initializeClient
 const TableNames = {
   Messages: process.env.DYNAMODB_MESSAGES_TABLE || 'dev_Messages-np',
   GroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats',
@@ -122,9 +111,24 @@ export class DynamoDBService {
         }
       });
 
-      // Validate required credentials first
+      // Validate required credentials with detailed logging
       if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
-        throw new Error('Missing required AWS credentials or region');
+        const missingCreds = {
+          accessKey: !process.env.AWS_ACCESS_KEY_ID,
+          secretKey: !process.env.AWS_SECRET_ACCESS_KEY,
+          region: !process.env.AWS_REGION
+        };
+        
+        logger.error('[DynamoDB] Missing required AWS credentials:', {
+          missing: missingCreds,
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME
+        });
+        
+        throw new Error(`Missing AWS credentials: ${Object.entries(missingCreds)
+          .filter(([_, isMissing]) => isMissing)
+          .map(([key]) => key)
+          .join(', ')}`);
       }
 
       // Store the client configuration
@@ -148,12 +152,37 @@ export class DynamoDBService {
       const client = new DynamoDBClient(this.clientConfig);
       this.dynamodb = DynamoDBDocumentClient.from(client);
       
-      // Test the connection immediately
+      // Test the connection immediately with retries
       logger.info('[DynamoDB] Testing connection...');
-      const isConnected = await this.testConnection();
+      let isConnected = false;
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (!isConnected && retryCount < maxRetries) {
+        try {
+          isConnected = await this.testConnection();
+          if (!isConnected) {
+            retryCount++;
+            if (retryCount < maxRetries) {
+              logger.warn(`[DynamoDB] Connection test failed, retrying (${retryCount}/${maxRetries})...`);
+              await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+            }
+          }
+        } catch (error) {
+          retryCount++;
+          if (retryCount < maxRetries) {
+            logger.warn(`[DynamoDB] Connection test error, retrying (${retryCount}/${maxRetries}):`, {
+              error: error instanceof Error ? error.message : 'Unknown error'
+            });
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          } else {
+            throw error;
+          }
+        }
+      }
       
       if (!isConnected) {
-        throw new Error('Failed to connect to DynamoDB');
+        throw new Error('Failed to connect to DynamoDB after multiple attempts');
       }
 
       this.isInitialized = true;
@@ -1513,8 +1542,7 @@ export class DynamoDBService {
       attachments: item.attachments || [],
       metadata: item.metadata || {},
       replyCount: item.replyCount || 0,
-      parentId: item.parentId,
-      edited: item.edited || false,
+      ...(item.parentId && { parentId: item.parentId }),
       sender: {
         id: item.userId,
         displayName: item.displayName,
@@ -1617,36 +1645,37 @@ export class DynamoDBService {
   private async testConnection(): Promise<boolean> {
     try {
       logger.info('[DynamoDB] Starting connection test with config:', {
-        region: this.clientConfig.region,
-        endpoint: this.clientConfig.endpoint,
-        hasCredentials: !!this.clientConfig.credentials,
-        credentialsLength: {
-          accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-          secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+        region: this.clientConfig?.region,
+        hasCredentials: !!this.clientConfig?.credentials,
+        tables: {
+          messages: TableNames.Messages,
+          groups: TableNames.GroupChats
         }
       });
 
       // Try to describe the Messages table as a connection test
-      await this.send(new DescribeTableCommand({
+      await this.dynamodb!.send(new DescribeTableCommand({
         TableName: TableNames.Messages
       }));
-      
-      logger.info('[DynamoDB] Connection test successful - able to describe Messages table');
+
+      logger.info('[DynamoDB] Connection test successful');
       return true;
     } catch (error) {
       logger.error('[DynamoDB] Connection test failed:', {
         error,
         errorName: error instanceof Error ? error.name : 'Unknown',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        errorStack: error instanceof Error ? error.stack : undefined,
         config: {
           region: this.clientConfig?.region,
-          endpoint: this.clientConfig?.endpoint,
           hasCredentials: !!this.clientConfig?.credentials,
-          tableNames: {
+          credentialsLength: {
+            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+          },
+          tables: {
             messages: TableNames.Messages,
-            groups: TableNames.GroupChats,
-            users: TableNames.Users
+            groups: TableNames.GroupChats
           }
         }
       });
