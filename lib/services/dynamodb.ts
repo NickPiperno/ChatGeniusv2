@@ -88,88 +88,46 @@ export function convertToMessage(item: DynamoDBMessage): Message {
 let instance: DynamoDBService | null = null;
 
 export class DynamoDBService {
-  private dynamodb: DynamoDBDocumentClient | null = null
-  public isInitialized = false
+  private static instance: DynamoDBService;
+  private dynamodb: DynamoDBDocumentClient | null = null;
+  private clientConfig: any;
+  public isInitialized = false;
 
   constructor() {
-    if (instance) {
-      return instance;
+    if (DynamoDBService.instance) {
+      return DynamoDBService.instance;
     }
-    instance = this;
+    DynamoDBService.instance = this;
+    this.initializeClient();
+  }
 
+  private initializeClient() {
     try {
       logger.info('[DynamoDB] Initializing DynamoDB service...', {
         nodeEnv: process.env.NODE_ENV,
         isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        region: process.env.AWS_REGION,
-        endpoint: process.env.AWS_ENDPOINT,
-        tables: {
-          messages: process.env.DYNAMODB_MESSAGES_TABLE,
-          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-          users: process.env.DYNAMODB_USERS_TABLE
-        }
+        region: process.env.AWS_REGION
       });
 
-      // Check required environment variables
-      const requiredEnvVars = {
+      // Store the client configuration
+      this.clientConfig = {
         region: process.env.AWS_REGION,
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID?.substring(0, 5) + '...',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ? '***' : undefined
-      }
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
+        }
+      };
 
-      // Log environment variable status
-      Object.entries(requiredEnvVars).forEach(([key, value]) => {
-        logger.info(`[DynamoDB] ${key}: ${value ? 'set' : 'not set'}`)
-      })
-
-      // Initialize DynamoDB client if all required variables are present
-      if (Object.values(requiredEnvVars).every(Boolean)) {
-        logger.info('[DynamoDB] Creating DynamoDB client...');
-        
-        const clientConfig = {
-          region: process.env.AWS_REGION,
-          credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
-          }
-        };
-        
-        logger.info('[DynamoDB] Client configuration:', {
-          ...clientConfig,
-          credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_ID?.substring(0, 5) + '...',
-            secretAccessKey: '***'
-          }
-        });
-
-        const client = new DynamoDBClient(clientConfig);
-        this.dynamodb = DynamoDBDocumentClient.from(client);
-        this.isInitialized = true;
-        
-        logger.info('[DynamoDB] Service initialized successfully');
-        
-        // Immediately verify tables to ensure connection works
-        this.verifyTables().catch(error => {
-          logger.error('[DynamoDB] Table verification failed:', {
-            error,
-            message: error instanceof Error ? error.message : 'Unknown error',
-            stack: error instanceof Error ? error.stack : undefined
-          });
-        });
-      } else {
-        logger.error('[DynamoDB] Missing required AWS credentials');
-        this.isInitialized = false;
-      }
+      const client = new DynamoDBClient(this.clientConfig);
+      this.dynamodb = DynamoDBDocumentClient.from(client);
+      this.isInitialized = true;
+      
+      logger.info('[DynamoDB] Service initialized successfully');
     } catch (error) {
       logger.error('[DynamoDB] Error initializing service:', {
         error,
         message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        env: {
-          nodeEnv: process.env.NODE_ENV,
-          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-          region: process.env.AWS_REGION
-        }
+        stack: error instanceof Error ? error.stack : undefined
       });
       this.isInitialized = false;
     }
@@ -177,7 +135,11 @@ export class DynamoDBService {
 
   private ensureInitialized() {
     if (!this.isInitialized || !this.dynamodb) {
-      throw new Error('DynamoDB service is not initialized')
+      logger.warn('[DynamoDB] Service not initialized, attempting to reinitialize...');
+      this.initializeClient();
+      if (!this.isInitialized || !this.dynamodb) {
+        throw new Error('DynamoDB service failed to initialize');
+      }
     }
   }
 
