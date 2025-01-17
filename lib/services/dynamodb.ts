@@ -81,19 +81,41 @@ export class DynamoDBService {
   private dynamodb: DynamoDBDocumentClient | null = null;
   private clientConfig: any;
   public isInitialized = false;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor() {
-    if (DynamoDBService.instance) {
-      return DynamoDBService.instance;
+    logger.info('[DynamoDB] Constructor called:', {
+      hasInstance: !!instance,
+      isInitialized: instance?.isInitialized || false,
+      hasInitializationPromise: !!instance?.initializationPromise
+    });
+
+    if (instance) {
+      return instance;
     }
-    DynamoDBService.instance = this;
-    this.initializeClient();
+
+    instance = this;
+    // Start initialization immediately
+    this.initializationPromise = this.initializeClient();
   }
 
   private async initializeClient() {
+    logger.info('[DynamoDB] InitializeClient called:', {
+      isInitialized: this.isInitialized,
+      hasDynamoDB: !!this.dynamodb,
+      hasInitializationPromise: !!this.initializationPromise
+    });
+
     // Only try to initialize once
     if (this.isInitialized || this.dynamodb) {
-      logger.warn('[DynamoDB] Client already initialized, skipping initialization');
+      logger.warn('[DynamoDB] Client already initialized, skipping initialization:', {
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb,
+        clientConfig: {
+          region: this.clientConfig?.region,
+          hasCredentials: !!this.clientConfig?.credentials
+        }
+      });
       return;
     }
 
@@ -191,6 +213,7 @@ export class DynamoDBService {
     } catch (error) {
       this.dynamodb = null;
       this.isInitialized = false;
+      this.initializationPromise = null;
       
       logger.error('[DynamoDB] Error during service initialization:', {
         error,
@@ -210,25 +233,57 @@ export class DynamoDBService {
     }
   }
 
-  private ensureInitialized() {
-    logger.info('[DynamoDB] Checking initialization status:', {
+  private async ensureInitialized() {
+    logger.info('[DynamoDB] EnsureInitialized called:', {
       isInitialized: this.isInitialized,
       hasDynamoDB: !!this.dynamodb,
-      hasConfig: !!this.clientConfig,
-      configDetails: this.clientConfig ? {
+      hasInitializationPromise: !!this.initializationPromise,
+      clientConfig: this.clientConfig ? {
         region: this.clientConfig.region,
         hasCredentials: !!this.clientConfig.credentials
       } : 'No config'
     });
 
+    // Wait for any ongoing initialization
+    if (this.initializationPromise) {
+      logger.info('[DynamoDB] Waiting for ongoing initialization...');
+      await this.initializationPromise;
+      logger.info('[DynamoDB] Initialization completed:', {
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb
+      });
+    }
+
+    // If not initialized and no initialization in progress, start one
+    if (!this.isInitialized && !this.initializationPromise) {
+      logger.info('[DynamoDB] Starting new initialization...');
+      this.initializationPromise = this.initializeClient();
+      await this.initializationPromise;
+      logger.info('[DynamoDB] New initialization completed:', {
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb
+      });
+    }
+
     if (!this.isInitialized || !this.dynamodb) {
-      logger.error('[DynamoDB] Service not initialized and reinitialization is disabled for safety');
+      logger.error('[DynamoDB] Service not initialized after initialization attempt:', {
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb,
+        hasConfig: !!this.clientConfig,
+        env: {
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+          hasRegion: !!process.env.AWS_REGION,
+          hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+          hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY
+        }
+      });
       throw new Error('DynamoDB service is not initialized. Check AWS credentials and configuration.');
     }
   }
 
   async verifyTables(): Promise<void> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
     logger.info('[DynamoDB] Verifying required tables exist...')
     
     // Log the actual table names being used
@@ -281,7 +336,7 @@ export class DynamoDBService {
 
   // Add send method with proper typing
   async send<T = any>(command: any): Promise<T> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
     
     try {
       logger.info('[DynamoDB] Preparing to execute command:', {
@@ -1079,19 +1134,28 @@ export class DynamoDBService {
 
   async getGroupsByUserId(userId: string): Promise<GroupChat[]> {
     try {
-      logger.info('[DynamoDB] Getting groups for user:', {
+      logger.info('[DynamoDB] GetGroupsByUserId called:', {
         userId,
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb,
         tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      })
+      });
       
       // Check if groups table is available
       if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
-        logger.warn('[DynamoDB] Groups table not configured, returning empty array')
-        return []
+        logger.warn('[DynamoDB] Groups table not configured, returning empty array');
+        return [];
       }
 
-      this.ensureInitialized()
+      await this.ensureInitialized();
       
+      logger.info('[DynamoDB] Fetching groups for user:', {
+        userId,
+        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb
+      });
+
       // Get all groups and filter by user membership
       const result = await this.dynamodb!.send(new ScanCommand({
         TableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
@@ -1099,26 +1163,32 @@ export class DynamoDBService {
         ExpressionAttributeValues: {
           ':userId': userId
         }
-      }))
+      }));
 
-      const groups = (result.Items || []) as GroupChat[]
+      const groups = (result.Items || []) as GroupChat[];
       logger.info('[DynamoDB] Found groups for user:', {
         userId,
         count: groups.length,
         groups: groups.map(g => ({ id: g.id, name: g.name, memberCount: g.members?.length })),
         tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      })
+      });
 
-      return groups
+      return groups;
     } catch (error) {
       logger.error('[DynamoDB] Error getting groups for user:', {
         error,
         userId,
         message: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
-        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      })
-      throw error
+        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        isInitialized: this.isInitialized,
+        hasDynamoDB: !!this.dynamodb,
+        clientConfig: this.clientConfig ? {
+          region: this.clientConfig.region,
+          hasCredentials: !!this.clientConfig.credentials
+        } : 'No config'
+      });
+      throw error;
     }
   }
 
