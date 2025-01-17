@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { DynamoDBService } from '@/lib/services/dynamodb';
 import { logger } from '@/lib/logger';
-import { getSession } from '@auth0/nextjs-auth0';
+import { withApiAuthRequired, getSession } from '@auth0/nextjs-auth0';
 
 let dynamoDb: DynamoDBService;
 
@@ -18,19 +18,14 @@ async function getDynamoDBInstance() {
   return dynamoDb;
 }
 
-export async function GET(request: Request) {
+export const GET = withApiAuthRequired(async function GET(req) {
   try {
     // Get initialized DynamoDB instance
     const db = await getDynamoDBInstance();
     logger.info('[Groups API] Processing GET request');
 
-    // Get user from session
     const session = await getSession();
-    if (!session?.user?.sub) {
-      logger.warn('[Groups API] Unauthorized request - no user session');
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    const userId = session.user.sub;
+    const userId = session?.user.sub;
 
     logger.info('[Groups API] Fetching groups for user:', { userId });
 
@@ -62,21 +57,16 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});
 
-export async function POST(request: Request) {
+export const POST = withApiAuthRequired(async function POST(req) {
   try {
     // Get initialized DynamoDB instance
     const db = await getDynamoDBInstance();
     logger.info('[Groups API] Processing POST request');
 
-    // Get user from session
     const session = await getSession();
-    if (!session?.user?.sub) {
-      logger.warn('[Groups API] Unauthorized request - no user session');
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    const userId = session.user.sub;
+    const userId = session?.user.sub;
 
     logger.info('[Groups API] Creating/updating group for user:', { userId });
 
@@ -108,4 +98,4 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
-} 
+}); 
