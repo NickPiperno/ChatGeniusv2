@@ -77,9 +77,13 @@ export function SocketProvider({ children }: SocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL
+    // Use window.location.origin for production, fallback to env var for development
+    const apiUrl = typeof window !== 'undefined' 
+      ? window.location.origin  // This will be the actual Vercel URL in production
+      : process.env.NEXT_PUBLIC_API_URL
+
     if (!apiUrl) {
-      console.error('[Socket] NEXT_PUBLIC_API_URL is not defined')
+      console.error('[Socket] API URL is not defined')
       return
     }
 
@@ -90,11 +94,7 @@ export function SocketProvider({ children }: SocketProviderProps) {
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       autoConnect: true,
-      forceNew: true,
-      ...(apiUrl.includes('localhost') && {
-        withCredentials: false,
-        timeout: 10000
-      })
+      forceNew: true
     })
 
     newSocket.on('connect', () => {

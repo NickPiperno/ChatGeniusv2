@@ -102,9 +102,9 @@ export async function createCombinedServer() {
     path: '/api/socketio',
     transports: ['websocket', 'polling'],
     cors: {
-      origin: process.env.NODE_ENV === 'development' 
-        ? 'http://localhost:3000'
-        : process.env.NEXT_PUBLIC_API_URL,
+      origin: process.env.NODE_ENV === 'production'
+        ? [/\.vercel\.app$/, /localhost/]
+        : 'http://localhost:3000',
       methods: ['GET', 'POST'],
       credentials: true
     }
