@@ -91,34 +91,38 @@ export function SocketProvider({ children }: SocketProviderProps) {
       reconnectionDelay: 1000,
       autoConnect: true,
       forceNew: true,
-      ...(apiUrl.includes('localhost') && {
-        withCredentials: false,
-        timeout: 10000
-      })
+      secure: true,
+      rejectUnauthorized: false,
+      withCredentials: true,
+      timeout: 10000
     })
 
     newSocket.on('connect', () => {
-      console.log('[Socket] Connected with ID:', newSocket.id)
+      console.log('[Socket] Connected with ID:', newSocket.id, 'Transport:', newSocket.io.engine.transport.name)
       setSocket(newSocket)
       setIsConnected(true)
     })
 
-    newSocket.on('disconnect', () => {
-      console.log('[Socket] Disconnected')
+    newSocket.on('disconnect', (reason) => {
+      console.log('[Socket] Disconnected:', reason)
       setIsConnected(false)
       toast({
         title: 'Connection lost',
-        description: 'Attempting to reconnect...',
+        description: `Attempting to reconnect... (${reason})`,
         variant: 'destructive'
       })
     })
 
     newSocket.on('connect_error', (error: Error) => {
-      console.error('[Socket] Connection error:', error)
+      console.error('[Socket] Connection error:', {
+        message: error.message,
+        type: error.name,
+        transport: newSocket.io?.engine?.transport?.name
+      })
       setIsConnected(false)
       toast({
         title: 'Connection error',
-        description: 'Failed to connect to server',
+        description: `Failed to connect: ${error.message}`,
         variant: 'destructive'
       })
     })
