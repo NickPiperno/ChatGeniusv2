@@ -4,7 +4,6 @@ import { useEffect, useCallback, createContext, useContext, ReactNode, useState 
 import { io, Socket } from 'socket.io-client'
 import { useToast } from '@/components/ui/use-toast'
 import { Message, MessageReaction } from '@/types/models/message'
-import getConfig from 'next/config'
 
 interface MessageData {
   message: {
@@ -78,18 +77,22 @@ export function SocketProvider({ children }: SocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
-    const { publicRuntimeConfig } = getConfig()
-    const apiUrl = publicRuntimeConfig.NEXT_PUBLIC_API_URL
-    
-    if (!apiUrl) {
-      console.error('[Socket] NEXT_PUBLIC_API_URL is not defined')
-      return
-    }
+    let apiUrl: string;
 
-    const socketUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`
-    console.log('[Socket] Connecting to:', socketUrl)
+    // In development, use the environment variable
+    if (process.env.NODE_ENV === 'development') {
+      apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+      console.log('[Socket] Development mode, using:', apiUrl);
+    } else {
+      // In production, use the Railway URL
+      apiUrl = 'https://chatgeniusv2-production.up.railway.app';
+      console.log('[Socket] Production mode, using:', apiUrl);
+    }
     
-    const newSocket = io(socketUrl, {
+    console.log('[Socket] Environment:', process.env.NODE_ENV);
+    console.log('[Socket] Connecting to:', apiUrl);
+    
+    const newSocket = io(apiUrl, {
       transports: ['websocket', 'polling'],
       path: '/api/socketio',
       reconnectionAttempts: 5,
