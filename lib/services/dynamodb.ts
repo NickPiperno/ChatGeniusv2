@@ -84,7 +84,7 @@ export function convertToMessage(item: DynamoDBMessage): Message {
 
 export class DynamoDBService {
   private dynamodb: DynamoDBDocumentClient | null = null
-  private isInitialized = false
+  public isInitialized = false
 
   constructor() {
     try {
@@ -94,8 +94,12 @@ export class DynamoDBService {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
         messagesTable: process.env.DYNAMODB_MESSAGES_TABLE,
+        usersTable: process.env.DYNAMODB_USERS_TABLE
+      }
+
+      // Optional tables
+      const optionalEnvVars = {
         groupChatsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        usersTable: process.env.DYNAMODB_USERS_TABLE,
         threadReadStatusTable: process.env.DYNAMODB_THREAD_READ_STATUS_TABLE,
         typingIndicatorsTable: process.env.DYNAMODB_TYPING_INDICATORS_TABLE
       }
@@ -103,6 +107,10 @@ export class DynamoDBService {
       // Log environment variable status
       Object.entries(requiredEnvVars).forEach(([key, value]) => {
         logger.info(`[DynamoDB] ${key} is ${value ? 'set' : 'not set'}`)
+      })
+
+      Object.entries(optionalEnvVars).forEach(([key, value]) => {
+        logger.info(`[DynamoDB] (Optional) ${key} is ${value ? 'set' : 'not set'}`)
       })
 
       // Initialize DynamoDB client if all required variables are present
@@ -908,6 +916,14 @@ export class DynamoDBService {
   async getGroupsByUserId(userId: string): Promise<GroupChat[]> {
     try {
       console.log('[DynamoDB] Getting all groups for user:', userId)
+      
+      // Check if groups table is available
+      if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
+        console.log('[DynamoDB] Groups table not configured, returning empty array')
+        return []
+      }
+
+      this.ensureInitialized()
       
       // Get all groups since all users should have access to all groups
       const result = await this.dynamodb!.send(new ScanCommand({

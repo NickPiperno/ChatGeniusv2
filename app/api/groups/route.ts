@@ -3,21 +3,27 @@ import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-let dynamoDb: DynamoDBService | null = null;
-
-try {
-  dynamoDb = new DynamoDBService()
-} catch (error) {
-  logger.error('[DynamoDB] Failed to initialize service:', error)
+// Initialize DynamoDB service for each request instead of at module level
+async function getDynamoDBService() {
+  try {
+    const service = new DynamoDBService()
+    if (!service.isInitialized) {
+      logger.error('[DynamoDB] Service failed to initialize')
+      return null
+    }
+    return service
+  } catch (error) {
+    logger.error('[DynamoDB] Error creating service:', error)
+    return null
+  }
 }
 
 export const runtime = 'nodejs'
 
 export async function GET() {
   try {
-    // Check if DynamoDB is initialized
+    const dynamoDb = await getDynamoDBService()
     if (!dynamoDb) {
-      logger.error('[GROUPS_GET] DynamoDB service not initialized')
       return NextResponse.json({ 
         error: 'Database service unavailable',
         details: 'Please check AWS credentials and configuration'
@@ -32,7 +38,17 @@ export async function GET() {
     const userId = session.user.sub
 
     logger.info('Fetching groups for user', { userId })
-    const groups = await dynamoDb!.getGroupsByUserId(userId)
+    
+    // Handle case where groups table is not configured
+    if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
+      logger.warn('Groups table not configured')
+      return NextResponse.json({
+        count: 0,
+        groups: []
+      })
+    }
+
+    const groups = await dynamoDb.getGroupsByUserId(userId)
     
     logger.debug('Groups fetched:', groups.map(g => ({
       id: g.id,
@@ -64,7 +80,6 @@ export async function GET() {
       }
     })
     
-    // Return a more specific error message
     return NextResponse.json({
       error: 'Database operation failed',
       details: error instanceof Error ? error.message : 'Unknown error',
@@ -75,12 +90,19 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    // Check if DynamoDB is initialized
+    const dynamoDb = await getDynamoDBService()
     if (!dynamoDb) {
-      logger.error('[GROUPS_POST] DynamoDB service not initialized')
       return NextResponse.json({ 
         error: 'Database service unavailable',
         details: 'Please check AWS credentials and configuration'
+      }, { status: 503 })
+    }
+
+    // Check if groups table is configured
+    if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
+      return NextResponse.json({ 
+        error: 'Groups functionality not available',
+        details: 'Groups table not configured'
       }, { status: 503 })
     }
 
@@ -99,7 +121,7 @@ export async function POST(request: Request) {
     }
 
     logger.info('Creating group', { name, userId })
-    const group = await dynamoDb!.createGroupChat({
+    const group = await dynamoDb.createGroupChat({
       id: crypto.randomUUID(),
       name,
       userId,
@@ -120,6 +142,22 @@ export async function POST(request: Request) {
 
 export async function PATCH() {
   try {
+    const dynamoDb = await getDynamoDBService()
+    if (!dynamoDb) {
+      return NextResponse.json({ 
+        error: 'Database service unavailable',
+        details: 'Please check AWS credentials and configuration'
+      }, { status: 503 })
+    }
+
+    // Check if groups table is configured
+    if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
+      return NextResponse.json({ 
+        error: 'Groups functionality not available',
+        details: 'Groups table not configured'
+      }, { status: 503 })
+    }
+
     const session = await getSession()
     if (!session?.user?.sub) {
       logger.warn('Unauthorized update attempt - no user ID')
@@ -128,12 +166,12 @@ export async function PATCH() {
 
     // Get all users
     logger.info('Fetching all users')
-    const allUsers = await dynamoDb!.getAllUsers()
+    const allUsers = await dynamoDb.getAllUsers()
     const userIds = allUsers.map(user => user.id)
 
     // Get all groups
     logger.info('Fetching all groups')
-    const allGroups = await dynamoDb!.getAllGroups()
+    const allGroups = await dynamoDb.getAllGroups()
 
     // Update each group to include all users
     logger.info('Updating all groups with all users:', {
@@ -143,7 +181,7 @@ export async function PATCH() {
 
     const updates = await Promise.all(
       allGroups.map(async group => {
-        const updatedGroup = await dynamoDb!.updateGroup(group.id, {
+        const updatedGroup = await dynamoDb.updateGroup(group.id, {
           members: userIds,
           updatedAt: new Date().toISOString()
         })
