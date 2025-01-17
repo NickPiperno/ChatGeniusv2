@@ -100,14 +100,17 @@ export async function createCombinedServer() {
 
   const io = new Server(server, {
     path: '/api/socketio',
-    transports: ['websocket', 'polling'],
+    transports: ['websocket'],
     cors: {
       origin: process.env.NODE_ENV === 'production'
-        ? [/\.vercel\.app$/, /localhost/]
+        ? [/\.vercel\.app$/, /localhost/, /https:\/\/[^.]+\.vercel\.app$/]
         : 'http://localhost:3000',
       methods: ['GET', 'POST'],
       credentials: true
-    }
+    },
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000
   })
 
   const dynamoDb = new DynamoDBService()

@@ -77,24 +77,20 @@ export function SocketProvider({ children }: SocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
-    // Use window.location.origin for production, fallback to env var for development
-    const apiUrl = typeof window !== 'undefined' 
-      ? window.location.origin  // This will be the actual Vercel URL in production
-      : process.env.NEXT_PUBLIC_API_URL
+    // Get the base URL for the WebSocket connection
+    const baseUrl = process.env.NODE_ENV === 'production'
+      ? window.location.origin.replace('http', 'ws').replace('https', 'wss')  // Ensure WSS in production
+      : 'ws://localhost:3000'
 
-    if (!apiUrl) {
-      console.error('[Socket] API URL is not defined')
-      return
-    }
-
-    console.log('[Socket] Connecting to:', apiUrl)
-    const newSocket = io(apiUrl, {
-      transports: ['websocket', 'polling'],
+    console.log('[Socket] Connecting to:', baseUrl)
+    const newSocket = io(baseUrl, {
+      transports: ['websocket'],
       path: '/api/socketio',
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       autoConnect: true,
-      forceNew: true
+      forceNew: true,
+      secure: process.env.NODE_ENV === 'production'
     })
 
     newSocket.on('connect', () => {
