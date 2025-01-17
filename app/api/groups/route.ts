@@ -3,20 +3,33 @@ import { DynamoDBService } from '@/lib/services/dynamodb';
 import { logger } from '@/lib/logger';
 import { withApiAuthRequired, getSession } from '@auth0/nextjs-auth0';
 
-let dynamoDb: DynamoDBService;
+// Use a more resilient singleton pattern
+const getDynamoDBInstance = (() => {
+  let instance: DynamoDBService | null = null;
+  let initializationPromise: Promise<DynamoDBService> | null = null;
 
-async function getDynamoDBInstance() {
-  if (!dynamoDb) {
-    console.log('[Groups API] Creating DynamoDB instance...');
-    dynamoDb = new DynamoDBService();
-    // Wait for initialization to complete
-    await (dynamoDb as any).initializationPromise;
-    console.log('[Groups API] DynamoDB instance ready:', {
-      isInitialized: dynamoDb.isInitialized
-    });
-  }
-  return dynamoDb;
-}
+  return async () => {
+    if (instance?.isInitialized) {
+      return instance;
+    }
+
+    if (!initializationPromise) {
+      initializationPromise = (async () => {
+        console.log('[Groups API] Creating DynamoDB instance...');
+        const db = new DynamoDBService();
+        // Wait for initialization to complete
+        await (db as any).initializationPromise;
+        console.log('[Groups API] DynamoDB instance ready:', {
+          isInitialized: db.isInitialized
+        });
+        instance = db;
+        return db;
+      })();
+    }
+
+    return initializationPromise;
+  };
+})();
 
 export const runtime = 'nodejs';
 
