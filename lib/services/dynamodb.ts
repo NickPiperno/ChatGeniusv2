@@ -47,8 +47,8 @@ if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !pro
 const TableNames = {
   Messages: process.env.DYNAMODB_MESSAGES_TABLE || 'dev_Messages-np',
   GroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats',
-  FileMetadata: process.env.DYNAMODB_FILE_METADATA_TABLE || 'dev_FileMetadata',
   Users: process.env.DYNAMODB_USERS_TABLE || 'dev_Users',
+  FileMetadata: process.env.DYNAMODB_FILE_METADATA_TABLE || 'dev_FileMetadata',
   Notifications: process.env.DYNAMODB_NOTIFICATIONS_TABLE || 'dev_Notifications',
   UserStatus: process.env.DYNAMODB_USER_STATUS_TABLE || 'dev_UserStatus',
   TypingIndicators: process.env.DYNAMODB_TYPING_INDICATORS_TABLE || 'dev_TypingIndicators',
@@ -144,33 +144,52 @@ export class DynamoDBService {
 
   async verifyTables(): Promise<void> {
     this.ensureInitialized();
-    console.log('[DynamoDB] Verifying required tables exist...')
+    logger.info('[DynamoDB] Verifying required tables exist...')
+    
+    // Log the actual table names being used
+    logger.info('[DynamoDB] Table names:', {
+      Messages: TableNames.Messages,
+      GroupChats: TableNames.GroupChats,
+      Users: TableNames.Users,
+      envMessages: process.env.DYNAMODB_MESSAGES_TABLE,
+      envGroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+      envUsers: process.env.DYNAMODB_USERS_TABLE
+    })
     
     try {
       const tables = [
-        TableNames.Messages,
-        TableNames.GroupChats,
-        TableNames.Users
+        { name: TableNames.Messages, envVar: process.env.DYNAMODB_MESSAGES_TABLE },
+        { name: TableNames.GroupChats, envVar: process.env.DYNAMODB_GROUP_CHATS_TABLE },
+        { name: TableNames.Users, envVar: process.env.DYNAMODB_USERS_TABLE }
       ]
       
-      for (const tableName of tables) {
+      for (const table of tables) {
         try {
+          logger.info(`[DynamoDB] Checking table ${table.name} (${table.envVar})...`)
           await this.send(new DescribeTableCommand({
-            TableName: tableName
+            TableName: table.name
           }))
-          console.log(`[DynamoDB] Table ${tableName} exists`)
+          logger.info(`[DynamoDB] Table ${table.name} exists and is accessible`)
         } catch (error) {
           if (error instanceof ResourceNotFoundException) {
-            console.error(`[DynamoDB] Table ${tableName} does not exist`)
+            logger.error(`[DynamoDB] Table ${table.name} does not exist`)
             throw error
           }
+          logger.error(`[DynamoDB] Error checking table ${table.name}:`, {
+            error,
+            message: error instanceof Error ? error.message : 'Unknown error'
+          })
           throw error
         }
       }
       
-      console.log('[DynamoDB] All required tables exist')
+      logger.info('[DynamoDB] All required tables exist and are accessible')
     } catch (error) {
-      console.error('[DynamoDB] Error verifying tables:', error)
+      logger.error('[DynamoDB] Error verifying tables:', {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      })
       throw error
     }
   }

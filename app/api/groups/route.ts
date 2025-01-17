@@ -101,6 +101,22 @@ export async function POST(request: Request) {
       }, { status: 503 })
     }
 
+    // Verify tables exist and are accessible
+    try {
+      logger.info('[GROUPS_POST] Verifying tables...')
+      await dynamoDb.verifyTables()
+      logger.info('[GROUPS_POST] Tables verified successfully')
+    } catch (error) {
+      logger.error('[GROUPS_POST] Table verification failed:', {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      })
+      return NextResponse.json({ 
+        error: 'Database tables not accessible',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }, { status: 503 })
+    }
+
     // Check if groups table is configured
     logger.info('[GROUPS_POST] Environment check:', {
       hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
