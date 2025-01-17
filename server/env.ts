@@ -10,9 +10,10 @@ if (process.env.NODE_ENV !== 'production') {
   }
 }
 
-// Helper function to validate URL or Railway variable
-function isValidUrlOrRailwayVar(url: string) {
-  if (url.includes('${RAILWAY')) return true
+// Helper function to validate URL or deployment platform variables
+function isValidUrlOrPlatformVar(url: string) {
+  // Check for platform-specific URL variables
+  if (url.includes('${RAILWAY') || url.includes('${VERCEL')) return true
   try {
     new URL(url)
     return true
@@ -24,8 +25,8 @@ function isValidUrlOrRailwayVar(url: string) {
 const envSchema = z.object({
   // App Configuration
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  NEXT_PUBLIC_API_URL: z.string().refine((url) => isValidUrlOrRailwayVar(url), {
-    message: "NEXT_PUBLIC_API_URL must be a valid URL or Railway variable"
+  NEXT_PUBLIC_API_URL: z.string().refine((url) => isValidUrlOrPlatformVar(url), {
+    message: "NEXT_PUBLIC_API_URL must be a valid URL or platform variable (e.g., https://${VERCEL_URL} for Vercel or https://${RAILWAY_STATIC_URL} for Railway)"
   }),
   PORT: z.string().default('3000'),
 
@@ -45,6 +46,10 @@ const envSchema = z.object({
   // Clerk Authentication
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string(),
   CLERK_SECRET_KEY: z.string(),
+  NEXT_PUBLIC_CLERK_SIGN_IN_URL: z.string().default('/sign-in'),
+  NEXT_PUBLIC_CLERK_SIGN_UP_URL: z.string().default('/sign-up'),
+  NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: z.string().default('/'),
+  NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: z.string().default('/')
 })
 
 // Validate environment variables

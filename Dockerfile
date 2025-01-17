@@ -11,7 +11,7 @@ COPY . .
 
 # Set production mode and build-time environment variables
 ENV NODE_ENV=production \
-    NEXT_PUBLIC_API_URL=${RAILWAY_STATIC_URL} \
+    NEXT_PUBLIC_API_URL=https://localhost:3000 \
     AWS_REGION=us-east-2 \
     AWS_ACCESS_KEY_ID=dummy-build-key \
     AWS_SECRET_ACCESS_KEY=dummy-build-secret \
@@ -20,7 +20,11 @@ ENV NODE_ENV=production \
     MONGODB_URI=mongodb://dummy-build-uri \
     DYNAMODB_MESSAGES_TABLE=dev_Messages \
     DYNAMODB_GROUPS_TABLE=dev_Groups \
-    DYNAMODB_USERS_TABLE=dev_Users
+    DYNAMODB_USERS_TABLE=dev_Users \
+    NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in \
+    NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up \
+    NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/ \
+    NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/
 
 # Build the application
 RUN npm run build
