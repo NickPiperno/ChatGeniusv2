@@ -4,79 +4,18 @@ import next from 'next'
 import { parse } from 'url'
 import { logger } from '../lib/logger'
 import { DynamoDBService } from '../lib/services/dynamodb'
-import { Message, MessageUpdate, MessageReaction } from '../types/models/message'
-
-// Types
-interface MessageData {
-  message: {
-    content: string
-    userId: string
-    displayName: string
-    imageUrl?: string
-    attachments?: any[]
-    metadata?: Record<string, any>
-    parentId?: string
-    sender?: {
-      id: string
-      displayName: string
-      imageUrl: string
-    }
-  }
-  groupId: string
-}
-
-interface ReactionData {
-  groupId: string
-  messageId: string
-  emoji: string
-  userId: string
-  parentId?: string
-  add: boolean
-}
-
-// Define socket event types
-interface ServerToClientEvents {
-  error: (data: { message: string }) => void;
-  message: (data: any) => void;
-  thread_update: (data: any) => void;
-  reaction: (data: any) => void;
-  delete_message: (data: { messageId: string }) => void;
-  edit_message: (data: { messageId: string; content: string; edited: boolean }) => void;
-  thread_sync: (data: { messageId: string; message: Message; replies: Message[] }) => void;
-  thread_typing: (data: { messageId: string; userId: string; isTyping: boolean }) => void;
-  thread_read: (data: { messageId: string; userId: string; lastReadTimestamp: string }) => void;
-  group_name_updated: (data: { groupId: string; name: string }) => void;
-}
-
-interface ClientToServerEvents {
-  joinRoom: (room: string) => void;
-  leaveRoom: (room: string) => void;
-  join_conversation: (data: any) => void;
-  leave_conversation: (data: any) => void;
-  thread_update: (data: any) => void;
-  reaction: (data: any) => void;
-  message: (data: any) => void;
-  delete_message: (data: { messageId: string; groupId: string }) => void;
-  edit_message: (data: { groupId: string; messageId: string; content: string }) => void;
-  thread_sync: (data: { groupId: string; messageId: string }) => void;
-  thread_typing: (data: { groupId: string; messageId: string; isTyping: boolean }) => void;
-  thread_read: (data: { groupId: string; messageId: string; lastReadTimestamp: string }) => void;
-  group_name_updated: (data: { groupId: string; name: string }) => void;
-}
-
-interface InterServerEvents {
-  ping: () => void;
-}
-
-interface SocketData {
-  userId: string;
-}
-
-interface SocketStats {
-  connected: boolean;
-  connections: number;
-  rooms: number;
-}
+import { Message, MessageUpdate } from '../types/models/message'
+import crypto from 'crypto'
+import { 
+  ServerToClientEvents, 
+  ClientToServerEvents,
+  MessageData,
+  ReactionData,
+  MessageEvent,
+  ReactionEvent,
+  MessageUpdateEvent,
+  MessageDeleteEvent
+} from '../types/events/socket'
 
 // Initialize Next.js
 const dev = process.env.NODE_ENV !== 'production'
@@ -84,6 +23,9 @@ const hostname = 'localhost'
 const port = parseInt(process.env.PORT || '3000', 10)
 const app = next({ dev, hostname, port })
 const handle = app.getRequestHandler()
+
+// Initialize DynamoDB service
+const dynamoDb = new DynamoDBService()
 
 export async function createCombinedServer() {
   await app.prepare()
@@ -110,116 +52,150 @@ export async function createCombinedServer() {
     }
   })
 
-  const dynamoDb = new DynamoDBService()
-
   io.on('connection', (socket: Socket<ClientToServerEvents, ServerToClientEvents>) => {
-    logger.info('[Socket] Client connected:', { socketId: socket.id })
-
-    // Handle joining conversations
-    socket.on('join_conversation', async (data: { groupId: string }) => {
-      logger.info('[Socket] Client joining conversation:', { 
-        socketId: socket.id, 
-        groupId: data.groupId,
-        previousRooms: Array.from(socket.rooms)
-      })
-      await socket.join(data.groupId)
-      logger.info('[Socket] Client joined conversation:', { 
-        socketId: socket.id, 
-        groupId: data.groupId,
-        currentRooms: Array.from(socket.rooms),
-        roomSize: (await io.in(data.groupId).allSockets()).size
-      })
+    logger.info('[Socket] Client connected:', {
+      socketId: socket.id
     })
 
-    // Handle leaving conversations
-    socket.on('leave_conversation', async (data: { groupId: string }) => {
-      logger.info('[Socket] Client leaving conversation:', { socketId: socket.id, groupId: data.groupId })
-      await socket.leave(data.groupId)
+    // Join conversation
+    socket.on('join_conversation', async (groupId: string) => {
+      logger.info('[Socket] Client joining conversation:', {
+        socketId: socket.id,
+        groupId
+      })
+      
+      socket.join(groupId)
     })
 
-    // Handle new messages
+    // Leave conversation
+    socket.on('leave_conversation', async (groupId: string) => {
+      logger.info('[Socket] Client leaving conversation:', {
+        socketId: socket.id,
+        groupId
+      })
+      
+      socket.leave(groupId)
+    })
+
+    // Handle messages
     socket.on('message', async (data: MessageData) => {
-      try {
-        logger.info('[Socket] New message received:', {
-          socketId: socket.id,
-          groupId: data.groupId,
-          content: data.message.content.substring(0, 50),
-          rooms: Array.from(socket.rooms),
-          allSockets: Array.from((await io.in(data.groupId).allSockets())).length
-        })
+      logger.info('[Socket] Received message:', {
+        socketId: socket.id,
+        groupId: data.groupId
+      })
 
-        // Save message to DynamoDB
-        const messageToSave: Message = {
+      try {
+        const message = await dynamoDb.createMessage({
           id: crypto.randomUUID(),
-          groupId: data.groupId,
           content: data.message.content,
           userId: data.message.userId,
           displayName: data.message.displayName,
           imageUrl: data.message.imageUrl || '',
+          groupId: data.groupId,
           timestamp: new Date().toISOString(),
           reactions: {},
           attachments: data.message.attachments || [],
           metadata: data.message.metadata || {},
           replyCount: 0,
           parentId: data.message.parentId,
-          sender: {
+          sender: data.message.sender || {
             id: data.message.userId,
             displayName: data.message.displayName,
             imageUrl: data.message.imageUrl || ''
           },
           replies: []
+        })
+
+        const messageEvent: MessageEvent = {
+          message,
+          groupId: data.groupId
         }
 
-        logger.info('[Socket] Saving message:', {
-          messageId: messageToSave.id,
-          groupId: messageToSave.groupId
+        socket.to(data.groupId).emit('message', messageEvent)
+        
+        logger.info('[Socket] Message sent successfully:', {
+          messageId: message.id,
+          groupId: data.groupId
         })
-
-        const savedMessage = await dynamoDb.createMessage(messageToSave)
-
-        logger.info('[Socket] Broadcasting message:', {
-          messageId: savedMessage.id,
-          groupId: savedMessage.groupId,
-          roomSize: (await io.in(data.groupId).allSockets()).size
-        })
-
-        // Broadcast to all clients in the room (including sender)
-        io.in(data.groupId).emit('message', savedMessage)
       } catch (error) {
-        logger.error('[Socket] Error handling message:', error)
-        socket.emit('error', {
-          message: error instanceof Error ? error.message : 'Failed to send message'
-        })
+        logger.error('[Socket] Error sending message:', error)
+        socket.emit('error', { message: 'Failed to send message' })
       }
     })
 
-    // Handle message deletion
-    socket.on('delete_message', async (data: { messageId: string; groupId: string }) => {
+    // Handle reactions
+    socket.on('reaction', async (data: ReactionData) => {
+      logger.info('[Socket] Received reaction:', {
+        socketId: socket.id,
+        messageId: data.messageId,
+        emoji: data.emoji
+      })
+
       try {
-        logger.info('[Socket] Delete message request:', {
-          socketId: socket.id,
+        const reactionEvent: ReactionEvent = {
           messageId: data.messageId,
-          groupId: data.groupId
+          groupId: data.groupId,
+          emoji: data.emoji,
+          userId: data.userId,
+          parentId: data.parentId,
+          add: data.add
+        }
+
+        socket.to(data.groupId).emit('reaction', reactionEvent)
+        
+        logger.info('[Socket] Reaction sent successfully:', {
+          messageId: data.messageId,
+          emoji: data.emoji
         })
+      } catch (error) {
+        logger.error('[Socket] Error sending reaction:', error)
+        socket.emit('error', { message: 'Failed to send reaction' })
+      }
+    })
 
-        // Delete message from DynamoDB
-        await dynamoDb.deleteMessage(data.messageId)
+    // Handle message edits
+    socket.on('edit_message', async (data: MessageUpdateEvent) => {
+      logger.info('[Socket] Editing message:', {
+        socketId: socket.id,
+        messageId: data.messageId
+      })
 
-        // Broadcast deletion to all clients in the room
-        io.to(data.groupId).emit('delete_message', {
+      try {
+        socket.to(data.groupId).emit('edit_message', data)
+        
+        logger.info('[Socket] Message edited successfully:', {
+          messageId: data.messageId
+        })
+      } catch (error) {
+        logger.error('[Socket] Error editing message:', error)
+        socket.emit('error', { message: 'Failed to edit message' })
+      }
+    })
+
+    // Handle message deletions
+    socket.on('delete_message', async (data: MessageDeleteEvent) => {
+      logger.info('[Socket] Deleting message:', {
+        socketId: socket.id,
+        messageId: data.messageId
+      })
+
+      try {
+        socket.to(data.groupId).emit('delete_message', data)
+        
+        logger.info('[Socket] Message deleted successfully:', {
           messageId: data.messageId
         })
       } catch (error) {
         logger.error('[Socket] Error deleting message:', error)
-        socket.emit('error', {
-          message: 'Failed to delete message'
-        })
+        socket.emit('error', { message: 'Failed to delete message' })
       }
     })
 
     // Handle disconnection
     socket.on('disconnect', () => {
-      logger.info('[Socket] Client disconnected:', { socketId: socket.id })
+      logger.info('[Socket] Client disconnected:', {
+        socketId: socket.id
+      })
     })
   })
 

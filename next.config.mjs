@@ -16,6 +16,14 @@ const nextConfig = {
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,
   },
+  env: {
+    AWS_REGION: process.env.AWS_REGION,
+    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+    DYNAMODB_MESSAGES_TABLE: process.env.DYNAMODB_MESSAGES_TABLE,
+    DYNAMODB_GROUP_CHATS_TABLE: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+    DYNAMODB_USERS_TABLE: process.env.DYNAMODB_USERS_TABLE
+  },
   poweredByHeader: false,
   compress: true,
   reactStrictMode: true,

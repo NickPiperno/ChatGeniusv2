@@ -44,13 +44,13 @@ export function MessageItem({
   const [showReactionPicker, setShowReactionPicker] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editedContent, setEditedContent] = useState(message.content)
-  const isCurrentUser = user?.id === message.userId
+  const isCurrentUser = user?.sub === message.userId
   const [replyCount, setReplyCount] = useState(message.replies?.length || 0)
 
   const handleReaction = (emoji: string) => {
-    if (!user?.id) return
+    if (!user?.sub) return
     
-    const hasReacted = message.reactions?.[emoji]?.users.includes(user.id)
+    const hasReacted = message.reactions?.[emoji]?.users.includes(user.sub)
     onReaction(message.id, emoji, hasReacted ? emoji : undefined)
     setShowReactionPicker(false)
   }
@@ -207,7 +207,7 @@ export function MessageItem({
                   size="sm"
                   className={cn(
                     "h-6 flex items-center gap-1 px-2 py-0.5 text-xs hover:bg-accent/20",
-                    reaction.users.includes(user?.id || '') && "bg-accent/20"
+                    reaction.users.includes(user?.sub || '') && "bg-accent/20"
                   )}
                   onClick={() => handleReaction(emoji)}
                 >

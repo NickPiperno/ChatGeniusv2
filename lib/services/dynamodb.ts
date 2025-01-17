@@ -1,6 +1,8 @@
 import { 
   DynamoDBClient, 
-  DynamoDBClientConfig 
+  DynamoDBClientConfig,
+  DescribeTableCommand,
+  ResourceNotFoundException
 } from '@aws-sdk/client-dynamodb'
 import { 
   DynamoDBDocumentClient, 
@@ -153,6 +155,38 @@ export class DynamoDBService {
     })
     
     console.log('[DynamoDB] Service initialized')
+  }
+
+  async verifyTables(): Promise<void> {
+    console.log('[DynamoDB] Verifying required tables exist...')
+    
+    try {
+      const tables = [
+        TableNames.Messages,
+        TableNames.GroupChats,
+        TableNames.Users
+      ]
+      
+      for (const tableName of tables) {
+        try {
+          await this.send(new DescribeTableCommand({
+            TableName: tableName
+          }))
+          console.log(`[DynamoDB] Table ${tableName} exists`)
+        } catch (error) {
+          if (error instanceof ResourceNotFoundException) {
+            console.error(`[DynamoDB] Table ${tableName} does not exist`)
+            throw error
+          }
+          throw error
+        }
+      }
+      
+      console.log('[DynamoDB] All required tables exist')
+    } catch (error) {
+      console.error('[DynamoDB] Error verifying tables:', error)
+      throw error
+    }
   }
 
   // Add send method with proper typing
@@ -868,9 +902,30 @@ export class DynamoDBService {
   // Error handling wrapper
   public async handleDynamoDBOperation<T>(operation: () => Promise<T>): Promise<T> {
     try {
+      if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
+        console.error('[DynamoDB] Missing AWS credentials:', {
+          hasAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
+          hasSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+          hasRegion: !!process.env.AWS_REGION,
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME
+        })
+        throw new Error('Missing AWS credentials')
+      }
+
       return await operation()
     } catch (error) {
-      console.error('[DynamoDB] Operation failed:', error)
+      console.error('[DynamoDB] Operation failed:', {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        type: error instanceof Error ? error.constructor.name : typeof error,
+        env: {
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+          region: process.env.AWS_REGION
+        }
+      })
       throw error
     }
   }

@@ -38,12 +38,13 @@ interface ChatSettings {
 }
 
 interface MessageInputTiptapProps {
-  onSendMessage: (content: string, attachments?: { id: string; name: string; url: string; type: 'image' | 'document'; size: number }[]) => Promise<void>
-  onEditMessage?: (content: string) => Promise<void>
-  editingMessage?: Message | null
-  chatSettings: {
-    enterToSend: boolean
-  }
+  onSendMessage: (content: string, attachments?: Array<{
+    id: string
+    name: string
+    url: string
+    type: 'document' | 'image'
+  }>) => Promise<void>
+  chatSettings: ChatSettings
   users: User[]
   isReplying?: boolean
   placeholder?: string
@@ -107,8 +108,6 @@ const MentionList = ({ items, command }: MentionListProps) => {
 
 export function MessageInputTiptap({
   onSendMessage,
-  onEditMessage,
-  editingMessage,
   chatSettings,
   users,
   isReplying = false,
@@ -205,13 +204,6 @@ export function MessageInputTiptap({
     isEmpty: editor?.isEmpty
   })
 
-  // Update editor content when editingMessage changes
-  useEffect(() => {
-    if (editingMessage && editor) {
-      editor.commands.setContent(editingMessage.content)
-    }
-  }, [editingMessage, editor])
-
   const handleSendMessage = async () => {
     if (!editor) return
 
@@ -221,12 +213,6 @@ export function MessageInputTiptap({
     if (isEmpty && uploadedFiles.length === 0) return
 
     try {
-      if (editingMessage && onEditMessage) {
-        await onEditMessage(content)
-        editor.commands.clearContent()
-        return
-      }
-
       const uploadedAttachments: FileUploadResult[] = []
       
       if (uploadedFiles.length > 0) {
@@ -416,14 +402,6 @@ export function MessageInputTiptap({
     } catch (error) {
       console.error('Error uploading file:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to upload file')
-    }
-  }
-
-  // Handle keyboard shortcuts
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey && chatSettings.enterToSend) {
-      e.preventDefault()
-      handleSendMessage()
     }
   }
 

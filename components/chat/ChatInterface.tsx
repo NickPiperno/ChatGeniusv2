@@ -15,6 +15,7 @@ import { MessageInputTiptap } from './input/MessageInputTiptap'
 import { ReplyBanner } from './input/ReplyBanner'
 import { LoadingSpinner } from '@/components/ui/feedback/LoadingSpinner'
 import { logger } from '@/lib/logger'
+import { MessageThread } from './thread/MessageThread'
 
 interface ChatInterfaceProps {
   groupId: string
@@ -52,6 +53,15 @@ interface ReplyBannerProps {
   onCancel: () => void
 }
 
+interface ReactionEventData {
+  messageId: string
+  groupId: string
+  emoji: string
+  userId: string
+  add: boolean
+  parentId?: string
+}
+
 export function ChatInterface({
   groupId,
   users,
@@ -69,6 +79,7 @@ export function ChatInterface({
   const { user, isLoading } = useUser()
   const threadStore = useThreadStore()
   const socket = useSocket()
+  const activeThread = threadStore.activeThread
 
   // Fetch messages
   useEffect(() => {
@@ -76,10 +87,26 @@ export function ChatInterface({
       if (!user?.sub || !socket?.socket) return
       
       try {
+        setIsLoadingMessages(true)
+        logger.info('[Chat] Joining conversation:', { groupId })
+        
         // Join the conversation to receive messages
         socket.socket.emit('join_conversation', { groupId })
         
-        // Initial message load will come through the 'message' event handler
+        // Fetch initial messages from API
+        const response = await fetch(`/api/messages/${groupId}`)
+        const data = await response.json()
+        
+        if (data.messages) {
+          logger.info('[Chat] Initial messages loaded:', { count: data.messages.length })
+          // Sort messages by timestamp before setting them
+          const sortedMessages = data.messages.sort((a: Message, b: Message) => 
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+          setMessages(sortedMessages)
+          scrollToBottom()
+        }
+        
         setIsLoadingMessages(false)
       } catch (error) {
         logger.error('Error fetching messages:', error)
@@ -98,6 +125,7 @@ export function ChatInterface({
     // Clean up - leave conversation when unmounting
     return () => {
       if (socket?.socket) {
+        logger.info('[Chat] Leaving conversation:', { groupId })
         socket.socket.emit('leave_conversation', { groupId })
       }
     }
@@ -111,12 +139,66 @@ export function ChatInterface({
 
     const handleNewMessage = (message: Message) => {
       if (message.groupId === groupId) {
-        setMessages(prev => [...prev, message])
-        scrollToBottom()
+        logger.info('[Chat] New message received:', { 
+          messageId: message.id,
+          groupId: message.groupId,
+          isReply: !!message.parentId
+        })
+
+        if (message.parentId) {
+          // Update thread if this is a reply
+          if (activeThread?.parentMessage?.id === message.parentId) {
+            threadStore.setActiveThread({
+              ...activeThread,
+              replies: [...activeThread.replies, message]
+            })
+          }
+          // Update parent message's reply count
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === message.parentId) {
+              return {
+                ...msg,
+                replies: [...(msg.replies || []), message],
+                replyCount: (msg.replyCount || 0) + 1
+              }
+            }
+            return msg
+          }))
+        } else {
+          setMessages(prev => {
+            const newMessages = [...prev, message];
+            return newMessages.sort((a, b) => 
+              new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+          })
+          scrollToBottom()
+        }
       }
     }
 
     const handleMessageUpdate = (data: { messageId: string; content: string; edited: boolean }) => {
+      logger.info('[Chat] Message update received:', {
+        messageId: data.messageId,
+        content: data.content.substring(0, 50)
+      });
+
+      // Update message in thread if applicable
+      if (activeThread?.parentMessage?.id === data.messageId) {
+        threadStore.setActiveThread({
+          ...activeThread,
+          parentMessage: {
+            ...activeThread.parentMessage,
+            content: data.content,
+            edited: data.edited
+          }
+        });
+      } else if (activeThread) {
+        threadStore.updateReply(data.messageId, {
+          content: data.content,
+          edited: data.edited
+        });
+      }
+
       setMessages(prev => 
         prev.map(msg => 
           msg.id === data.messageId ? { ...msg, content: data.content, edited: data.edited } : msg
@@ -128,32 +210,109 @@ export function ChatInterface({
       setMessages(prev => prev.filter(msg => msg.id !== data.messageId))
     }
 
-    const handleReaction = (data: { messageId: string; reactions: MessageReaction[] }) => {
-      setMessages(prev => 
-        prev.map(msg => 
-          msg.id === data.messageId ? { ...msg, reactions: data.reactions } : msg
-        )
-      )
-    }
+    const handleReactionUpdate = (data: { messageId: string; reactions: MessageReaction[] }) => {
+      logger.info('[Chat] Received reaction update:', {
+        messageId: data.messageId,
+        reactions: data.reactions
+      });
+
+      // Convert array to object structure
+      const reactionsObject: Record<string, MessageReaction> = {};
+      data.reactions.forEach(reaction => {
+        if (reaction.emoji) {
+          reactionsObject[reaction.emoji] = {
+            emoji: reaction.emoji,
+            users: reaction.users,
+            count: reaction.users.length
+          };
+        }
+      });
+
+      logger.info('[Chat] Converted reactions to object:', {
+        messageId: data.messageId,
+        reactionsObject,
+        reactionsKeys: Object.keys(reactionsObject)
+      });
+
+      // Update reaction in thread if applicable
+      if (activeThread?.parentMessage?.id === data.messageId) {
+        threadStore.setActiveThread({
+          ...activeThread,
+          parentMessage: {
+            ...activeThread.parentMessage,
+            reactions: reactionsObject
+          }
+        });
+      } else if (activeThread) {
+        threadStore.updateReply(data.messageId, {
+          reactions: reactionsObject
+        });
+      }
+
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === data.messageId) {
+          return {
+            ...msg,
+            reactions: reactionsObject
+          };
+        }
+        return msg;
+      }));
+    };
     
+    const handleThreadSync = (data: { messageId: string; message: Message; replies: Message[] }) => {
+      logger.info('[Chat] Thread sync received:', {
+        messageId: data.messageId,
+        replyCount: data.replies.length
+      })
+
+      // Update thread state with synced data
+      if (activeThread?.parentMessage?.id === data.messageId) {
+        threadStore.setActiveThread({
+          parentMessage: data.message,
+          replies: data.replies,
+          isOpen: true
+        })
+      }
+
+      // Update message in main list
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === data.messageId) {
+          return {
+            ...msg,
+            replies: data.replies,
+            replyCount: data.replies.length
+          }
+        }
+        return msg
+      }))
+    }
+
     socketRef.on('message', handleNewMessage)
     socketRef.on('edit_message', handleMessageUpdate)
     socketRef.on('delete_message', handleMessageDelete)
-    socketRef.on('reaction', handleReaction)
+    socketRef.on('reaction', handleReactionUpdate)
+    socketRef.on('thread_sync', handleThreadSync)
 
     return () => {
       socketRef.off('message', handleNewMessage)
       socketRef.off('edit_message', handleMessageUpdate)
       socketRef.off('delete_message', handleMessageDelete)
-      socketRef.off('reaction', handleReaction)
+      socketRef.off('reaction', handleReactionUpdate)
+      socketRef.off('thread_sync', handleThreadSync)
     }
-  }, [socket?.socket, groupId])
+  }, [socket?.socket, groupId, activeThread, threadStore])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const handleSendMessage = async (content: string, attachments: { id: string; name: string; url: string; type: 'image' | 'document'; size: number }[] = []) => {
+  const handleSendMessage = async (content: string, attachments: Array<{
+    id: string
+    name: string
+    url: string
+    type: 'document' | 'image'
+  }> = []) => {
     if (!socket?.socket || !user?.sub) {
       logger.error('[Chat] Cannot send message:', {
         hasSocket: !!socket?.socket,
@@ -167,47 +326,49 @@ export function ChatInterface({
       return
     }
 
-    try {
-      logger.info('[Chat] Sending message:', {
-        content: content.substring(0, 50),
-        groupId,
-        userId: user.sub
-      })
+    logger.info('[Chat] Sending message:', {
+      content: content.substring(0, 50),
+      groupId,
+      userId: user.sub,
+      isReply: !!replyingTo,
+      replyingToMessage: replyingTo ? {
+        id: replyingTo.id,
+        content: replyingTo.content.substring(0, 50)
+      } : null
+    })
 
-      const messageData = {
-        content,
-        userId: user.sub,
-        displayName: user.name || user.email?.split('@')[0] || user.sub,
-        imageUrl: user.picture || undefined,
-        groupId,
-        attachments,
-        ...(replyingTo && {
-          parentId: replyingTo.id
-        }),
-        sender: user.picture ? {
-          id: user.sub,
-          displayName: user.name || user.email?.split('@')[0] || user.sub,
-          imageUrl: user.picture
-        } : undefined
+    const messageData = {
+      content,
+      userId: user.sub,
+      displayName: user.nickname || user.name || user.email?.split('@')[0] || user.sub,
+      imageUrl: user.picture || '',
+      groupId,
+      attachments,
+      ...(replyingTo && {
+        parentId: replyingTo.id
+      }),
+      sender: {
+        id: user.sub,
+        displayName: user.nickname || user.name || user.email?.split('@')[0] || user.sub,
+        imageUrl: user.picture || ''
       }
+    }
 
-      socket.socket.emit('message', {
-        message: messageData,
-        groupId
-      })
+    logger.info('[Chat] Constructed message data:', {
+      ...messageData,
+      content: messageData.content.substring(0, 50),
+      hasParentId: !!messageData.parentId
+    })
 
-      logger.info('[Chat] Message sent successfully')
-      if (replyingTo) {
-        setReplyingTo(null)
-      }
+    socket.socket.emit('message', {
+      message: messageData,
+      groupId
+    })
 
-    } catch (error) {
-      logger.error('Error sending message:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to send message. Please try again.',
-        variant: 'destructive'
-      })
+    logger.info('[Chat] Message sent successfully')
+    if (replyingTo) {
+      logger.info('[Chat] Clearing reply state')
+      setReplyingTo(null)
     }
   }
 
@@ -232,61 +393,114 @@ export function ChatInterface({
     }
   }
 
-  const handleEditMessage = async (messageId: string, content: string) => {
+  const handleEdit = async (messageId: string, content: string) => {
     if (!socket?.socket) {
       toast({
-        title: 'Error',
-        description: 'Not connected to chat server',
-        variant: 'destructive'
-      })
-      return
+        title: "Error",
+        description: "Not connected to chat server",
+        variant: "destructive"
+      });
+      return;
     }
 
     try {
-      socket.socket.emit('edit_message', { messageId, content, groupId })
-      setEditingMessage(null)
+      // Strip HTML tags from content
+      const cleanContent = content.replace(/<\/?[^>]+(>|$)/g, "").trim();
+      
+      logger.info('[Chat] Editing message:', {
+        messageId,
+        content: cleanContent.substring(0, 50),
+        isReply: !!activeThread?.replies.find(reply => reply.id === messageId)
+      });
+
+      // Update local message state immediately for better UX
+      const updatedMessages = messages.map(msg => 
+        msg.id === messageId 
+          ? { ...msg, content: cleanContent, edited: true }
+          : msg
+      );
+      setMessages(updatedMessages);
+
+      // Emit the edit event
+      socket.socket.emit('edit_message', {
+        groupId,
+        messageId,
+        content: cleanContent
+      });
     } catch (error) {
-      console.error('Error editing message:', error)
+      logger.error('[Chat] Error editing message:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to edit message'
-      })
+        title: "Error",
+        description: "Failed to edit message",
+        variant: "destructive"
+      });
     }
-  }
+  };
 
   const handleReaction = async (messageId: string, emoji: string) => {
-    if (!socket?.socket || !user?.sub) {
-      toast({
-        title: 'Error',
-        description: 'Not connected to chat server',
-        variant: 'destructive'
-      })
-      return
-    }
+    if (!socket?.socket || !user?.sub) return
 
     try {
-      socket.socket.emit('reaction', {
+      logger.info('[Chat] Adding reaction to message:', {
         messageId,
+        emoji,
+        userId: user.sub
+      })
+
+      // Find message in main messages or thread replies
+      const message = messages.find(msg => msg.id === messageId) || 
+                     activeThread?.replies.find(reply => reply.id === messageId) ||
+                     (activeThread?.parentMessage?.id === messageId ? activeThread.parentMessage : null)
+
+      if (!message) {
+        logger.warn('[Chat] Message not found for reaction:', { 
+          messageId,
+          isInMainMessages: !!messages.find(msg => msg.id === messageId),
+          isInThreadReplies: !!activeThread?.replies.find(reply => reply.id === messageId),
+          isThreadParent: activeThread?.parentMessage?.id === messageId
+        })
+        return
+      }
+
+      // Check if user has already reacted with this emoji
+      const hasReacted = message.reactions?.[emoji]?.users.includes(user.sub);
+
+      socket.socket.emit('reaction', {
         groupId,
+        messageId,
         emoji,
         userId: user.sub,
-        add: true // We can enhance this later to toggle reactions
+        add: !hasReacted
       })
     } catch (error) {
-      console.error('Error adding reaction:', error)
+      logger.error('[Chat] Error handling reaction:', error)
       toast({
         title: 'Error',
-        description: 'Failed to add reaction'
+        description: 'Failed to add reaction',
+        variant: 'destructive'
       })
     }
   }
 
   const handleOpenThread = (message: Message) => {
-    if (threadStore.setActiveThread) {
-      threadStore.setActiveThread({
-        parentMessage: message,
-        replies: [],
-        isOpen: true
+    logger.info('[Chat] Opening thread locally:', {
+      messageId: message.id,
+      hasReplies: !!message.replies,
+      replyCount: message.replies?.length || 0
+    })
+
+    // Update local thread state with existing replies
+    threadStore.setActiveThread({
+      parentMessage: message,
+      replies: message.replies || [],
+      isOpen: true
+    })
+
+    // Request thread state update from server
+    if (socket?.socket) {
+      socket.socket.emit('thread_sync', {
+        groupId,
+        messageId: message.id
       })
     }
   }
@@ -312,15 +526,12 @@ export function ChatInterface({
         messages={messages}
         onReply={(messageId: string) => {
           const message = messages.find(m => m.id === messageId);
-          if (message) setReplyingTo(message);
-        }}
-        onEdit={(messageId: string, content: string) => {
-          const message = messages.find(m => m.id === messageId);
           if (message) {
-            const updatedMessage = { ...message, content };
-            setEditingMessage(updatedMessage);
+            setReplyingTo(message);
+            handleOpenThread(message);
           }
         }}
+        onEdit={handleEdit}
         onDelete={handleDeleteMessage}
         onReaction={handleReaction}
         className="flex-1"
@@ -334,15 +545,27 @@ export function ChatInterface({
       )}
       <MessageInputTiptap
         onSendMessage={handleSendMessage}
-        onEditMessage={editingMessage ? 
-          (content: string) => handleEditMessage(editingMessage.id, content) : 
-          undefined
-        }
-        editingMessage={editingMessage}
         chatSettings={chatSettings}
         users={users}
-        className="mt-4"
+        isReplying={!!replyingTo}
+        placeholder={replyingTo ? "Write a reply..." : "Type a message..."}
+        className="bg-transparent"
+        groupId={groupId}
       />
+      {activeThread && (
+        <MessageThread
+          isOpen={activeThread.isOpen}
+          onClose={() => threadStore.clearThread()}
+          parentMessage={activeThread.parentMessage!}
+          replies={activeThread.replies}
+          onReaction={handleReaction}
+          onEdit={handleEdit}
+          onDelete={handleDeleteMessage}
+          users={users}
+          headerHeight={headerHeight}
+          searchBarHeight={searchBarHeight}
+        />
+      )}
     </div>
   )
 } 

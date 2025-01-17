@@ -31,12 +31,30 @@ export async function GET() {
       groups
     })
   } catch (error) {
-    logger.error('[GROUPS_GET] Error:', error)
+    logger.error('[GROUPS_GET] Error:', {
+      error,
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      env: {
+        hasAuth0Secret: !!process.env.AUTH0_SECRET,
+        hasAuth0BaseUrl: !!process.env.AUTH0_BASE_URL,
+        hasAuth0IssuerBaseUrl: !!process.env.AUTH0_ISSUER_BASE_URL,
+        hasAuth0ClientId: !!process.env.AUTH0_CLIENT_ID,
+        hasAuth0ClientSecret: !!process.env.AUTH0_CLIENT_SECRET,
+        hasAwsAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
+        hasAwsSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+        hasAwsRegion: !!process.env.AWS_REGION,
+        nodeEnv: process.env.NODE_ENV,
+        apiUrl: process.env.NEXT_PUBLIC_API_URL
+      }
+    })
     
-    if (process.env.NODE_ENV === 'development') {
+    // Always return detailed error in development or on Railway for debugging
+    if (process.env.NODE_ENV === 'development' || process.env.RAILWAY_ENVIRONMENT_NAME) {
       return NextResponse.json({
         error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
+        stack: error instanceof Error ? error.stack : undefined,
+        type: error instanceof Error ? error.constructor.name : typeof error
       }, { status: 500 })
     }
     
