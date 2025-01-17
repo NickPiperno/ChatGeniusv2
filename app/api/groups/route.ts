@@ -6,37 +6,106 @@ import crypto from 'crypto'
 import { GroupChat } from '@/types/models/dynamodb'
 import { User } from '@/types/models/user'
 
-// Initialize DynamoDB service
-const dynamoDb = new DynamoDBService()
+// Log environment state at module level
+logger.info('[GROUPS_ROUTE] Module initialization:', {
+  nodeEnv: process.env.NODE_ENV,
+  isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+  hasRegion: !!process.env.AWS_REGION,
+  hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+  hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+  hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+  region: process.env.AWS_REGION,
+  groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
+});
+
+// Get DynamoDB singleton instance
+let dynamoDb: DynamoDBService;
+
+async function getDynamoDBInstance() {
+  if (!dynamoDb) {
+    logger.info('[GROUPS_ROUTE] Creating DynamoDB instance...');
+    dynamoDb = new DynamoDBService();
+    // Wait for initialization to complete
+    await (dynamoDb as any).initializationPromise;
+    logger.info('[GROUPS_ROUTE] DynamoDB instance ready:', {
+      isInitialized: dynamoDb.isInitialized
+    });
+  }
+  return dynamoDb;
+}
 
 export const runtime = 'nodejs'
 
 export async function GET() {
   try {
-    logger.info('[GROUPS_GET] Starting groups fetch request');
-    
-    // Check DynamoDB initialization
-    if (!dynamoDb.isInitialized) {
-      logger.error('[GROUPS_GET] DynamoDB service not initialized:', {
+    logger.info('[GROUPS_GET] Starting groups fetch request:', {
+      hasService: !!dynamoDb,
+      isInitialized: dynamoDb?.isInitialized,
+      env: {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
         hasRegion: !!process.env.AWS_REGION,
         hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
         hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
         hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
         region: process.env.AWS_REGION,
         groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      })
-      return NextResponse.json({ 
-        error: 'Database service unavailable',
-        details: 'Please check AWS credentials and configuration',
+      }
+    });
+    
+    // Get initialized DynamoDB instance
+    dynamoDb = await getDynamoDBInstance();
+    
+    // Check DynamoDB initialization
+    if (!dynamoDb.isInitialized) {
+      logger.error('[GROUPS_GET] DynamoDB service not initialized:', {
+        hasService: !!dynamoDb,
+        serviceState: dynamoDb ? {
+          isInitialized: dynamoDb.isInitialized,
+          hasInitializationPromise: !!(dynamoDb as any).initializationPromise
+        } : 'No service instance',
         env: {
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
           hasRegion: !!process.env.AWS_REGION,
           hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
           hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-          hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+          hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          region: process.env.AWS_REGION,
+          groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
         }
-      }, { status: 503 })
+      });
+
+      // Try to reinitialize
+      try {
+        logger.info('[GROUPS_GET] Attempting to reinitialize DynamoDB service...');
+        dynamoDb = new DynamoDBService();
+        // Wait for initialization to complete
+        await (dynamoDb as any).initializationPromise;
+        logger.info('[GROUPS_GET] Reinitialization result:', {
+          isInitialized: dynamoDb.isInitialized
+        });
+      } catch (reinitError) {
+        logger.error('[GROUPS_GET] Reinitialization failed:', {
+          error: reinitError,
+          message: reinitError instanceof Error ? reinitError.message : 'Unknown error',
+          stack: reinitError instanceof Error ? reinitError.stack : undefined
+        });
+      }
+
+      // If still not initialized, return error
+      if (!dynamoDb?.isInitialized) {
+        return NextResponse.json({ 
+          error: 'Database service unavailable',
+          details: 'Please check AWS credentials and configuration',
+          env: {
+            hasRegion: !!process.env.AWS_REGION,
+            hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+            hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+            hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+          }
+        }, { status: 503 });
+      }
     }
 
     const session = await getSession()

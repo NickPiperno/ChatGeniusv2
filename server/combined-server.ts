@@ -19,8 +19,21 @@ import {
 
 // Initialize Next.js
 const dev = process.env.NODE_ENV !== 'production'
-const hostname = 'localhost'
-const port = parseInt(process.env.PORT || '3000', 10)
+const hostname = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost'
+const port = parseInt(process.env.PORT || '8080', 10)
+
+logger.info('[Server] Starting with configuration:', {
+  env: process.env.NODE_ENV,
+  port,
+  hostname,
+  railway: {
+    environment: process.env.RAILWAY_ENVIRONMENT_NAME,
+    region: process.env.RAILWAY_REGION,
+    projectId: process.env.RAILWAY_PROJECT_ID,
+    serviceId: process.env.RAILWAY_SERVICE_ID
+  }
+});
+
 const app = next({ dev, hostname, port })
 const handle = app.getRequestHandler()
 
