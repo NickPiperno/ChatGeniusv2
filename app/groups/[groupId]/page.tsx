@@ -15,15 +15,15 @@ interface GroupPageProps {
 
 export async function generateMetadata({ params }: GroupPageProps): Promise<Metadata> {
   const { groupId } = params
+  const dynamoDb = new DynamoDBService()
   
   try {
-    const dynamoDb = await DynamoDBService.getInstance()
     const group = await dynamoDb.getGroupById(groupId)
     if (!group) return { title: 'Group Not Found' }
     
     return {
-      title: `${group.name.S} | ChatGenius`,
-      description: `Chat with members in ${group.name.S}`
+      title: `${group.name} | ChatGenius`,
+      description: `Chat with members in ${group.name}`
     }
   } catch (error) {
     logger.error('Error generating metadata:', error)
@@ -36,9 +36,9 @@ export default async function GroupPage({ params }: { params: { groupId: string 
   if (!session?.user) redirect('/api/auth/login')
   const userId = session.user.sub
 
+  const dynamoDb = new DynamoDBService()
+  
   try {
-    const dynamoDb = await DynamoDBService.getInstance()
-    
     logger.info('Fetching group:', { groupId: params.groupId, userId })
     const dbGroup = await dynamoDb.getGroupById(params.groupId)
     
@@ -49,23 +49,19 @@ export default async function GroupPage({ params }: { params: { groupId: string 
 
     // Ensure user is a member of the group
     logger.info('Ensuring user is member of group:', { groupId: params.groupId, userId })
-    const isMember = await dynamoDb.ensureUserInGroup(userId, params.groupId)
-    if (!isMember) {
-      logger.error('User is not a member of group:', { groupId: params.groupId, userId })
-      return notFound()
-    }
+    await dynamoDb.ensureUserInGroup(userId, params.groupId)
 
     // Get messages for the group
     logger.info('Fetching messages for group:', { groupId: params.groupId })
-    const messages = await dynamoDb.getMessagesForGroup(params.groupId)
+    const { messages } = await dynamoDb.getMessagesForGroup(params.groupId)
 
     // Convert DynamoDB group to Group type
     const group: Group = {
-      id: dbGroup.groupId.S,
-      name: dbGroup.name.S,
-      userId: dbGroup.userId.S,
-      createdAt: dbGroup.createdAt.S,
-      members: dbGroup.members?.SS || []
+      id: dbGroup.id,
+      name: dbGroup.name,
+      userId: dbGroup.userId,
+      createdAt: dbGroup.createdAt,
+      members: dbGroup.members || []
     }
 
     return <GroupPageClient group={group} messages={messages} userId={userId} />

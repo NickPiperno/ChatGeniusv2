@@ -3,7 +3,7 @@ import { createServer } from 'http'
 import next from 'next'
 import { parse } from 'url'
 import { logger } from '../lib/logger'
-import { DynamoDBService, convertToMessage } from '../lib/services/dynamodb'
+import { DynamoDBService } from '../lib/services/dynamodb'
 import { Message, MessageUpdate } from '../types/models/message'
 import crypto from 'crypto'
 import { 
@@ -16,68 +16,25 @@ import {
   MessageUpdateEvent,
   MessageDeleteEvent
 } from '../types/events/socket'
-import { MessageItem } from '../lib/services/dynamodb'
-import { AttributeValue } from '@aws-sdk/client-dynamodb'
-import { MessageAttachment } from '../types/models/message'
 
 // Initialize Next.js
 const dev = process.env.NODE_ENV !== 'production'
-const hostname = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost'
-const port = parseInt(process.env.PORT || '8080', 10)
-
-logger.info('[Server] Starting with configuration:', {
-  env: process.env.NODE_ENV,
-  port,
-  hostname,
-  railway: {
-    environment: process.env.RAILWAY_ENVIRONMENT_NAME,
-    region: process.env.RAILWAY_REGION,
-    projectId: process.env.RAILWAY_PROJECT_ID,
-    serviceId: process.env.RAILWAY_SERVICE_ID
-  }
-});
-
+const hostname = 'localhost'
+const port = parseInt(process.env.PORT || '3000', 10)
 const app = next({ dev, hostname, port })
 const handle = app.getRequestHandler()
 
 // Initialize DynamoDB service
-let dynamoDb: DynamoDBService;
-
-async function getDynamoDBInstance() {
-  if (!dynamoDb) {
-    logger.info('[Server] Creating DynamoDB instance...');
-    dynamoDb = await DynamoDBService.getInstance();
-    logger.info('[Server] DynamoDB instance ready');
-  }
-  return dynamoDb;
-}
+const dynamoDb = new DynamoDBService()
 
 export async function createCombinedServer() {
   await app.prepare()
-
-  // Initialize DynamoDB before creating server
-  try {
-    dynamoDb = await getDynamoDBInstance();
-    logger.info('[Server] DynamoDB initialized successfully');
-  } catch (error) {
-    logger.error('[Server] Failed to initialize DynamoDB:', {
-      error,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
-    // Continue server creation even if DynamoDB fails
-  }
-
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true)
       await handle(req, res, parsedUrl)
     } catch (err) {
-      logger.error('Error occurred handling request:', {
-        url: req.url,
-        error: err instanceof Error ? err.message : 'Unknown error',
-        stack: err instanceof Error ? err.stack : undefined
-      });
+      console.error('Error occurred handling', req.url, err)
       res.statusCode = 500
       res.end('internal server error')
     }
@@ -150,7 +107,7 @@ export async function createCombinedServer() {
         })
 
         const messageEvent: MessageEvent = {
-          message: convertToMessage(message),
+          message,
           groupId: data.groupId
         }
 

@@ -1,18 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
-import { logger } from '@/lib/logger'
 
-let dynamoDb: DynamoDBService | null = null;
-
-async function getDynamoDBInstance() {
-  if (!dynamoDb) {
-    logger.info('[Messages API] Initializing DynamoDB instance...');
-    dynamoDb = await DynamoDBService.getInstance();
-    logger.info('[Messages API] DynamoDB instance ready');
-  }
-  return dynamoDb;
-}
+const dynamoDb = new DynamoDBService()
 
 // GET /api/groups/[groupId]/messages
 export async function GET(
@@ -26,14 +16,10 @@ export async function GET(
 
     const { groupId } = params
     
-    const db = await getDynamoDBInstance();
-    const messages = await db.getMessagesForGroup(groupId)
+    const messages = await dynamoDb.getMessagesByGroup(groupId)
     return NextResponse.json(messages)
   } catch (error) {
-    logger.error('Error in GET /api/groups/[groupId]/messages:', {
-      error: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
+    console.error('Error in GET /api/groups/[groupId]/messages:', error)
     return new NextResponse(
       error instanceof Error ? error.message : 'Internal Server Error',
       { status: 500 }
@@ -57,17 +43,13 @@ export async function POST(
     const message = {
       ...data,
       groupId,
-      timestamp: new Date().toISOString()
+      timestamp: Date.now()
     }
 
-    const db = await getDynamoDBInstance();
-    const savedMessage = await db.createMessage(message)
+    const savedMessage = await dynamoDb.createMessage(message)
     return NextResponse.json(savedMessage)
   } catch (error) {
-    logger.error('Error in POST /api/groups/[groupId]/messages:', {
-      error: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
+    console.error('Error in POST /api/groups/[groupId]/messages:', error)
     return new NextResponse(
       error instanceof Error ? error.message : 'Internal Server Error',
       { status: 500 }
