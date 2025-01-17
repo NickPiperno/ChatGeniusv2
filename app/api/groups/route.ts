@@ -3,59 +3,29 @@ import { DynamoDBService } from '@/lib/services/dynamodb';
 import { logger } from '@/lib/logger';
 import { withApiAuthRequired, getSession } from '@auth0/nextjs-auth0';
 
-// Use a more resilient singleton pattern
-const getDynamoDBInstance = (() => {
-  let instance: DynamoDBService | null = null;
-  let initializationPromise: Promise<DynamoDBService> | null = null;
-
-  return async () => {
-    if (instance?.isInitialized) {
-      return instance;
-    }
-
-    if (!initializationPromise) {
-      initializationPromise = (async () => {
-        console.log('[Groups API] Creating DynamoDB instance...');
-        const db = new DynamoDBService();
-        // Wait for initialization to complete
-        await (db as any).initializationPromise;
-        console.log('[Groups API] DynamoDB instance ready:', {
-          isInitialized: db.isInitialized
-        });
-        instance = db;
-        return db;
-      })();
-    }
-
-    return initializationPromise;
-  };
-})();
-
 export const runtime = 'nodejs';
 
 export const GET = withApiAuthRequired(async function GET(req) {
   try {
-    console.log('[Groups API] Starting GET request');
+    logger.info('[Groups API] Starting GET request');
     
-    // Get initialized DynamoDB instance
-    const db = await getDynamoDBInstance();
-    console.log('[Groups API] DynamoDB instance obtained');
-
     // Get user from session
-    console.log('[Groups API] Getting session...');
+    logger.info('[Groups API] Getting session...');
     const session = await getSession();
-    console.log('[Groups API] Session result:', { hasSession: !!session });
+    logger.info('[Groups API] Session result:', { hasSession: !!session });
 
     if (!session?.user?.sub) {
-      console.warn('[Groups API] No user ID in session');
+      logger.warn('[Groups API] No user ID in session');
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
     const userId = session.user.sub;
 
-    console.log('[Groups API] Fetching groups for user:', { userId });
+    logger.info('[Groups API] Fetching groups for user:', { userId });
 
+    // Get the singleton instance
+    const db = await DynamoDBService.getInstance();
     const groups = await db.getGroupsByUserId(userId);
-    console.log('[Groups API] Successfully fetched groups', {
+    logger.info('[Groups API] Successfully fetched groups', {
       userId,
       groupCount: groups.length
     });
@@ -65,7 +35,7 @@ export const GET = withApiAuthRequired(async function GET(req) {
       groups
     });
   } catch (error) {
-    console.error('[Groups API] Error in GET request:', {
+    logger.error('[Groups API] Error in GET request:', {
       error: error instanceof Error ? {
         name: error.name,
         message: error.message,
@@ -81,27 +51,25 @@ export const GET = withApiAuthRequired(async function GET(req) {
 
 export const POST = withApiAuthRequired(async function POST(req) {
   try {
-    console.log('[Groups API] Starting POST request');
+    logger.info('[Groups API] Starting POST request');
     
-    // Get initialized DynamoDB instance
-    const db = await getDynamoDBInstance();
-    console.log('[Groups API] DynamoDB instance obtained');
-
     // Get user from session
-    console.log('[Groups API] Getting session...');
+    logger.info('[Groups API] Getting session...');
     const session = await getSession();
-    console.log('[Groups API] Session result:', { hasSession: !!session });
+    logger.info('[Groups API] Session result:', { hasSession: !!session });
 
     if (!session?.user?.sub) {
-      console.warn('[Groups API] No user ID in session');
+      logger.warn('[Groups API] No user ID in session');
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
     const userId = session.user.sub;
 
-    console.log('[Groups API] Creating/updating group for user:', { userId });
+    logger.info('[Groups API] Creating/updating group for user:', { userId });
 
+    // Get the singleton instance
+    const db = await DynamoDBService.getInstance();
     const groups = await db.getGroupsByUserId(userId);
-    console.log('[Groups API] Successfully fetched groups', {
+    logger.info('[Groups API] Successfully fetched groups', {
       userId,
       groupCount: groups.length
     });
@@ -111,7 +79,7 @@ export const POST = withApiAuthRequired(async function POST(req) {
       groups
     });
   } catch (error) {
-    console.error('[Groups API] Error in POST request:', {
+    logger.error('[Groups API] Error in POST request:', {
       error: error instanceof Error ? {
         name: error.name,
         message: error.message,
