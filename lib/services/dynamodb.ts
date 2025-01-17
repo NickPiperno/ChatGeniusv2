@@ -1616,20 +1616,38 @@ export class DynamoDBService {
 
   private async testConnection(): Promise<boolean> {
     try {
+      logger.info('[DynamoDB] Starting connection test with config:', {
+        region: this.clientConfig.region,
+        endpoint: this.clientConfig.endpoint,
+        hasCredentials: !!this.clientConfig.credentials,
+        credentialsLength: {
+          accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+          secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+        }
+      });
+
       // Try to describe the Messages table as a connection test
       await this.send(new DescribeTableCommand({
         TableName: TableNames.Messages
       }));
-      logger.info('[DynamoDB] Connection test successful');
+      
+      logger.info('[DynamoDB] Connection test successful - able to describe Messages table');
       return true;
     } catch (error) {
       logger.error('[DynamoDB] Connection test failed:', {
         error,
+        errorName: error instanceof Error ? error.name : 'Unknown',
         message: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
         config: {
           region: this.clientConfig?.region,
-          hasCredentials: !!this.clientConfig?.credentials
+          endpoint: this.clientConfig?.endpoint,
+          hasCredentials: !!this.clientConfig?.credentials,
+          tableNames: {
+            messages: TableNames.Messages,
+            groups: TableNames.GroupChats,
+            users: TableNames.Users
+          }
         }
       });
       return false;
