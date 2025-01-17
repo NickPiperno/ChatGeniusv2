@@ -83,8 +83,10 @@ export function SocketProvider({ children }: SocketProviderProps) {
       return
     }
 
-    console.log('[Socket] Connecting to:', apiUrl)
-    const newSocket = io(apiUrl, {
+    const socketUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`
+    console.log('[Socket] Connecting to:', socketUrl)
+    
+    const newSocket = io(socketUrl, {
       transports: ['websocket', 'polling'],
       path: '/api/socketio',
       reconnectionAttempts: 5,
