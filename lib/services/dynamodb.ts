@@ -31,7 +31,12 @@ console.log('[DynamoDB] Environment check:', {
   hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
   region: process.env.AWS_REGION,
   messagesTable: process.env.DYNAMODB_MESSAGES_TABLE || 'dev_Messages-np',
-  groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats'
+  groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats',
+  nodeEnv: process.env.NODE_ENV,
+  isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+  railwayEnv: process.env.RAILWAY_ENVIRONMENT_NAME,
+  railwayRegion: process.env.RAILWAY_REGION,
+  railwayServiceId: process.env.RAILWAY_SERVICE_ID
 })
 
 // Move credential validation to initializeClient
@@ -1715,67 +1720,103 @@ export class DynamoDBService {
   private async testConnection(): Promise<boolean> {
     try {
       const startTime = Date.now();
-      logger.info('[DynamoDB] Starting connection test with config:', {
-        region: this.clientConfig?.region,
-        hasCredentials: !!this.clientConfig?.credentials,
-        tables: {
-          messages: TableNames.Messages,
-          groups: TableNames.GroupChats
-        },
-        networkInfo: {
-          railway: {
-            region: process.env.RAILWAY_REGION,
-            environment: process.env.RAILWAY_ENVIRONMENT_NAME,
-            projectId: process.env.RAILWAY_PROJECT_ID,
-            serviceId: process.env.RAILWAY_SERVICE_ID
-          }
-        }
-      });
+      const tables = [
+        { name: TableNames.Messages, envVar: process.env.DYNAMODB_MESSAGES_TABLE },
+        { name: TableNames.GroupChats, envVar: process.env.DYNAMODB_GROUP_CHATS_TABLE },
+        { name: TableNames.Users, envVar: process.env.DYNAMODB_USERS_TABLE }
+      ];
 
-      // Try to describe the Messages table as a connection test
-      const result = await this.dynamodb!.send(new DescribeTableCommand({
-        TableName: TableNames.Messages
-      }));
-
-      const endTime = Date.now();
-      const latency = endTime - startTime;
-
-      logger.info('[DynamoDB] Connection test successful:', {
-        latencyMs: latency,
-        tableInfo: {
-          tableName: result.Table?.TableName,
-          tableStatus: result.Table?.TableStatus,
-          itemCount: result.Table?.ItemCount,
-          tableSizeBytes: result.Table?.TableSizeBytes
-        }
-      });
-      return true;
-    } catch (error) {
-      logger.error('[DynamoDB] Connection test failed:', {
-        error,
-        errorName: error instanceof Error ? error.name : 'Unknown',
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        errorStack: error instanceof Error ? error.stack : undefined,
-        networkInfo: {
-          railway: {
-            region: process.env.RAILWAY_REGION,
-            environment: process.env.RAILWAY_ENVIRONMENT_NAME,
-            projectId: process.env.RAILWAY_PROJECT_ID,
-            serviceId: process.env.RAILWAY_SERVICE_ID
-          }
-        },
-        config: {
-          region: this.clientConfig?.region,
-          hasCredentials: !!this.clientConfig?.credentials,
+      logger.info('[DynamoDB] Starting connection test for critical tables:', {
+        tables: tables.map(t => ({
+          name: t.name,
+          envVar: t.envVar,
+          isConfigured: !!t.envVar
+        })),
+        aws: {
+          region: process.env.AWS_REGION,
+          hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY,
           credentialsLength: {
             accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
             secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
-          },
-          tables: {
-            messages: TableNames.Messages,
-            groups: TableNames.GroupChats
           }
+        },
+        environment: {
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+          railwayRegion: process.env.RAILWAY_REGION
         }
+      });
+
+      // Test each critical table
+      for (const table of tables) {
+        const tableStartTime = Date.now();
+        logger.info(`[DynamoDB] Testing connection to ${table.name}...`, {
+          tableName: table.name,
+          envVar: table.envVar,
+          timestamp: new Date().toISOString()
+        });
+
+        try {
+          const result = await this.dynamodb!.send(new DescribeTableCommand({
+            TableName: table.name
+          }));
+
+          const tableLatency = Date.now() - tableStartTime;
+          logger.info(`[DynamoDB] Successfully connected to ${table.name}:`, {
+            tableName: table.name,
+            status: result.Table?.TableStatus,
+            itemCount: result.Table?.ItemCount,
+            sizeBytes: result.Table?.TableSizeBytes,
+            latencyMs: tableLatency,
+            createdAt: result.Table?.CreationDateTime,
+            arn: result.Table?.TableArn,
+            throughput: {
+              read: result.Table?.ProvisionedThroughput?.ReadCapacityUnits,
+              write: result.Table?.ProvisionedThroughput?.WriteCapacityUnits
+            }
+          });
+        } catch (error) {
+          logger.error(`[DynamoDB] Failed to connect to ${table.name}:`, {
+            tableName: table.name,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+            timestamp: new Date().toISOString(),
+            aws: {
+              region: process.env.AWS_REGION,
+              endpoint: process.env.AWS_ENDPOINT
+            }
+          });
+          return false;
+        }
+      }
+
+      const totalLatency = Date.now() - startTime;
+      logger.info('[DynamoDB] All critical table connections successful:', {
+        totalLatencyMs: totalLatency,
+        tablesChecked: tables.length,
+        timestamp: new Date().toISOString(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('[DynamoDB] Critical table connection test failed:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString(),
+        aws: {
+          region: process.env.AWS_REGION,
+          hasCredentials: !!process.env.AWS_ACCESS_KEY_ID
+        },
+        tables: [
+          TableNames.Messages,
+          TableNames.GroupChats,
+          TableNames.Users
+        ].map(name => ({
+          name,
+          envVar: process.env[`DYNAMODB_${name.toUpperCase()}_TABLE`]
+        }))
       });
       return false;
     }
