@@ -170,8 +170,25 @@ export class DynamoDBService {
       throw new Error('AWS credentials are required');
     }
 
+    // Explicitly set region based on environment
+    const region = process.env.AWS_REGION || 'us-east-2';
+    
+    // Log all relevant configuration
+    logger.info('[DynamoDB] Configuration:', {
+      region,
+      railwayRegion: process.env.RAILWAY_REGION,
+      environment: process.env.NODE_ENV,
+      hasAccessKey: !!accessKeyId,
+      hasSecretKey: !!secretAccessKey,
+      tables: {
+        groups: TableNames.GroupChats,
+        messages: TableNames.Messages,
+        users: TableNames.Users
+      }
+    });
+    
     this.config = {
-      region: process.env.AWS_REGION || 'us-east-1',
+      region,
       credentials: {
         accessKeyId,
         secretAccessKey
@@ -181,7 +198,9 @@ export class DynamoDBService {
 
     const clientConfig: DynamoDBClientConfig = {
       region: this.config.region,
-      credentials: this.config.credentials
+      credentials: this.config.credentials,
+      maxAttempts: 3,
+      retryMode: 'standard'
     };
 
     this.client = new DynamoDBClient(clientConfig);
@@ -232,45 +251,75 @@ export class DynamoDBService {
   }
 
   private async testConnection(): Promise<void> {
-    const attemptStart = Date.now();
-    this.metrics.totalAttempts++;
-    
-    try {
-      logger.info(`[DynamoDB] Connection attempt #${this.metrics.totalAttempts}`);
-      logger.info(`[DynamoDB] Credentials length - Access Key: ${this.config.credentials.accessKeyId.length}, Secret: ${this.config.credentials.secretAccessKey.length}`);
-      
-      const connectionTimeoutPromise = new Promise<void>((_, reject) => {
-        setTimeout(() => reject(new Error('Connection timeout')), CONNECTION_TIMEOUT_MS);
-      });
+    const maxRetries = 3;
+    const baseDelay = 1000;
 
-      await Promise.race([
-        this.client.send(new DescribeTableCommand({ TableName: this.config.tableName })),
-        connectionTimeoutPromise
-      ]);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`[DynamoDB] Connection attempt #${attempt}`, {
+          region: this.config.region,
+          tableName: this.config.tableName,
+          attempt,
+          maxRetries
+        });
+        
+        // Test all tables to ensure complete connectivity
+        const tables = [TableNames.GroupChats, TableNames.Messages, TableNames.Users];
+        
+        for (const table of tables) {
+          const params = {
+            TableName: table
+          };
+          
+          const command = new DescribeTableCommand(params);
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Connection timeout')), CONNECTION_TIMEOUT_MS);
+          });
 
-      this.metrics.lastAttemptDuration = Date.now() - attemptStart;
-      logger.info(`[DynamoDB] Connection test successful after ${this.metrics.lastAttemptDuration}ms`);
-    } catch (error) {
-      const typedError = error as Error & {
-        code?: string;
-        statusCode?: number;
-        requestId?: string;
-        time?: Date;
-        retryable?: boolean;
-      };
-      
-      this.metrics.lastAttemptDuration = Date.now() - attemptStart;
-      this.metrics.lastError = typedError.message;
-      logger.error(`[DynamoDB] Connection test failed after ${this.metrics.lastAttemptDuration}ms:`, {
-        error: typedError.message,
-        code: typedError.code,
-        statusCode: typedError.statusCode,
-        requestId: typedError.requestId,
-        time: typedError.time,
-        retryable: typedError.retryable,
-        metrics: this.metrics
-      });
-      throw error;
+          const result = await Promise.race([
+            this.client.send(command),
+            timeoutPromise
+          ]) as DescribeTableCommandOutput;
+
+          logger.info(`[DynamoDB] Table check successful:`, {
+            table,
+            status: result.Table?.TableStatus,
+            itemCount: result.Table?.ItemCount
+          });
+        }
+
+        logger.info(`[DynamoDB] All tables verified successfully on attempt ${attempt}`);
+        return;
+      } catch (error) {
+        const typedError = error as Error & {
+          code?: string;
+          statusCode?: number;
+          requestId?: string;
+        };
+
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 5000);
+        
+        logger.error(`[DynamoDB] Connection attempt ${attempt} failed:`, {
+          error: typedError.message,
+          code: typedError.code,
+          statusCode: typedError.statusCode,
+          requestId: typedError.requestId,
+          region: this.config.region,
+          nextRetryIn: attempt < maxRetries ? `${delay}ms` : 'no more retries',
+          credentials: {
+            hasAccessKey: !!this.config.credentials.accessKeyId,
+            hasSecretKey: !!this.config.credentials.secretAccessKey,
+            accessKeyLength: this.config.credentials.accessKeyId?.length,
+            secretKeyLength: this.config.credentials.secretAccessKey?.length
+          }
+        });
+
+        if (attempt === maxRetries) {
+          throw error;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
   }
 
