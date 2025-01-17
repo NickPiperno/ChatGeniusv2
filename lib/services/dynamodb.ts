@@ -1,6 +1,5 @@
 import { 
-  DynamoDBClient, 
-  DynamoDBClientConfig,
+  DynamoDBClient,
   DescribeTableCommand,
   ResourceNotFoundException
 } from '@aws-sdk/client-dynamodb'
@@ -13,18 +12,15 @@ import {
   DeleteCommand,
   ScanCommand
 } from '@aws-sdk/lib-dynamodb'
-import { Message, MessageUpdate } from '@/types/models/message'
+import { Message, MessageReaction, MessageUpdate } from '@/types/models/message'
 import { User } from '@/types/models/user'
-import { 
-  GroupChat, 
-  FileMetadata, 
-  Notification, 
-  UserStatus, 
-  TypingIndicator, 
-  Reaction, 
-  PinnedMessage, 
-  Mention
-} from '@/types/models/dynamodb'
+import { GroupChat, TypingIndicator, Reaction } from '@/types/models/dynamodb'
+import { ThreadReadStatus } from '@/types/models/thread'
+import { logger } from '@/lib/logger'
+
+interface DynamoDBMessage extends Omit<Message, 'reactions'> {
+  reactions: Record<string, MessageReaction>
+}
 
 // Initialize DynamoDB client
 console.log('[DynamoDB] Environment check:', {
@@ -48,38 +44,6 @@ if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !pro
   throw new Error('Missing required AWS credentials or region')
 }
 
-let client: DynamoDBClient
-let dynamodb: DynamoDBDocumentClient
-
-try {
-  client = new DynamoDBClient({
-    region: process.env.AWS_REGION,
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    }
-  });
-
-  // Log DynamoDB initialization
-  console.log('[DynamoDB] Client initialized with region:', process.env.AWS_REGION)
-
-  dynamodb = DynamoDBDocumentClient.from(client, {
-    marshallOptions: {
-      removeUndefinedValues: true,
-      convertEmptyValues: true
-    }
-  });
-
-  console.log('[DynamoDB] Document client initialized successfully')
-} catch (error) {
-  console.error('[DynamoDB] Error initializing DynamoDB client:', {
-    error,
-    message: error instanceof Error ? error.message : 'Unknown error',
-    stack: error instanceof Error ? error.stack : undefined
-  })
-  throw error
-}
-
 const TableNames = {
   Messages: process.env.DYNAMODB_MESSAGES_TABLE || 'dev_Messages-np',
   GroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats',
@@ -93,27 +57,6 @@ const TableNames = {
   Mentions: process.env.DYNAMODB_MENTIONS_TABLE || 'dev_Mentions',
   ThreadReadStatus: process.env.DYNAMODB_THREAD_READ_STATUS_TABLE || 'dev_ThreadReadStatus'
 };
-
-interface ThreadReadStatus {
-  userId: string
-  messageId: string
-  lastReadTimestamp: string
-}
-
-interface DynamoDBMessage {
-  id: string
-  groupId: string
-  content: string
-  userId: string
-  displayName: string
-  imageUrl?: string
-  timestamp: string
-  reactions: Record<string, any>
-  attachments: any[]
-  metadata?: Record<string, any>
-  replyCount: number
-  parentId?: string
-}
 
 // Make convertToMessage function public
 export function convertToMessage(item: DynamoDBMessage): Message {
@@ -140,24 +83,59 @@ export function convertToMessage(item: DynamoDBMessage): Message {
 }
 
 export class DynamoDBService {
-  private dynamodb: DynamoDBClient
+  private dynamodb: DynamoDBDocumentClient | null = null
+  private isInitialized = false
 
   constructor() {
-    console.log('[DynamoDB] Initializing service...')
-    
-    // Initialize the DynamoDB client
-    this.dynamodb = new DynamoDBClient({
-      region: process.env.AWS_REGION,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || ''
+    try {
+      // Check required environment variables
+      const requiredEnvVars = {
+        region: process.env.AWS_REGION,
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        messagesTable: process.env.DYNAMODB_MESSAGES_TABLE,
+        groupChatsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        usersTable: process.env.DYNAMODB_USERS_TABLE,
+        threadReadStatusTable: process.env.DYNAMODB_THREAD_READ_STATUS_TABLE,
+        typingIndicatorsTable: process.env.DYNAMODB_TYPING_INDICATORS_TABLE
       }
-    })
-    
-    console.log('[DynamoDB] Service initialized')
+
+      // Log environment variable status
+      Object.entries(requiredEnvVars).forEach(([key, value]) => {
+        logger.info(`[DynamoDB] ${key} is ${value ? 'set' : 'not set'}`)
+      })
+
+      // Initialize DynamoDB client if all required variables are present
+      if (Object.values(requiredEnvVars).every(Boolean)) {
+        const client = new DynamoDBClient({
+          region: process.env.AWS_REGION,
+          credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
+          }
+        })
+
+        this.dynamodb = DynamoDBDocumentClient.from(client)
+        this.isInitialized = true
+        logger.info('[DynamoDB] Service initialized successfully')
+      } else {
+        logger.error('[DynamoDB] Missing required environment variables')
+        this.isInitialized = false
+      }
+    } catch (error) {
+      logger.error('[DynamoDB] Error initializing service:', error)
+      this.isInitialized = false
+    }
+  }
+
+  private ensureInitialized() {
+    if (!this.isInitialized || !this.dynamodb) {
+      throw new Error('DynamoDB service is not initialized')
+    }
   }
 
   async verifyTables(): Promise<void> {
+    this.ensureInitialized();
     console.log('[DynamoDB] Verifying required tables exist...')
     
     try {
@@ -191,18 +169,15 @@ export class DynamoDBService {
 
   // Add send method with proper typing
   async send<T = any>(command: any): Promise<T> {
+    this.ensureInitialized();
+    
     console.log('[DynamoDB] Executing command:', {
       commandName: command?.constructor?.name,
       tableName: command?.input?.TableName
     })
     
-    if (!this.dynamodb) {
-      console.error('[DynamoDB] Client not initialized')
-      throw new Error('DynamoDB client not initialized')
-    }
-    
     try {
-      const result = await this.dynamodb.send(command)
+      const result = await this.dynamodb!.send(command)
       console.log('[DynamoDB] Command executed successfully')
       return result as T
     } catch (error) {
@@ -234,7 +209,7 @@ export class DynamoDBService {
       ...(message.parentId && { parentId: message.parentId })
     }
 
-    await dynamodb.send(new PutCommand({
+    await this.dynamodb!.send(new PutCommand({
       TableName: TableNames.Messages,
       Item: item
     }))
@@ -264,7 +239,7 @@ export class DynamoDBService {
 
       // Then increment the parent message's replyCount
       if (reply.parentId) {
-        await dynamodb.send(new UpdateCommand({
+        await this.dynamodb!.send(new UpdateCommand({
           TableName: TableNames.Messages,
           Key: {
             id: reply.parentId,
@@ -296,7 +271,7 @@ export class DynamoDBService {
     
     try {
       // First, get all messages for the group
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.Messages,
         IndexName: 'GroupIdIndex',
         KeyConditionExpression: 'groupId = :groupId',
@@ -376,7 +351,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new UpdateCommand({
+      await this.dynamodb!.send(new UpdateCommand({
         TableName: TableNames.Messages,
         Key: { id: parentId },
         UpdateExpression: 'SET replies = list_append(if_not_exists(replies, :empty_list), :reply)',
@@ -402,7 +377,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new PutCommand({
+      await this.dynamodb!.send(new PutCommand({
         TableName: TableNames.Reactions,
         Item: {
           messageId,
@@ -428,7 +403,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new DeleteCommand({
+      await this.dynamodb!.send(new DeleteCommand({
         TableName: TableNames.Reactions,
         Key: {
           messageId,
@@ -455,7 +430,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new PutCommand({
+      await this.dynamodb!.send(new PutCommand({
         TableName: TableNames.TypingIndicators,
         Item: {
           conversationId,
@@ -475,7 +450,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting typing users for conversation:', conversationId)
     
     try {
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.TypingIndicators,
         KeyConditionExpression: 'conversationId = :conversationId',
         FilterExpression: 'isTyping = :isTyping',
@@ -500,7 +475,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new DeleteCommand({
+      await this.dynamodb!.send(new DeleteCommand({
         TableName: TableNames.TypingIndicators,
         Key: {
           conversationId,
@@ -516,7 +491,7 @@ export class DynamoDBService {
 
   // Group Chats
   async createGroupChat(groupChat: GroupChat): Promise<GroupChat> {
-    await dynamodb.send(new PutCommand({
+    await this.dynamodb!.send(new PutCommand({
       TableName: TableNames.GroupChats,
       Item: {
         id: groupChat.id,
@@ -536,7 +511,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting all users')
     
     try {
-      const result = await dynamodb.send(new ScanCommand({
+      const result = await this.dynamodb!.send(new ScanCommand({
         TableName: TableNames.Users,
         Limit: 50 // Limiting to 50 users for performance
       }))
@@ -557,7 +532,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting user by ID:', userId)
     
     try {
-      const result = await dynamodb.send(new GetCommand({
+      const result = await this.dynamodb!.send(new GetCommand({
         TableName: TableNames.Users,
         Key: { id: userId }
       }))
@@ -578,7 +553,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting message:', messageId)
     
     try {
-      const result = await dynamodb.send(new GetCommand({
+      const result = await this.dynamodb!.send(new GetCommand({
         TableName: TableNames.Messages,
         Key: { id: messageId }
       }))
@@ -607,7 +582,7 @@ export class DynamoDBService {
     })
     
     try {
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.Messages,
         IndexName: 'ParentMessageIndex',
         KeyConditionExpression: 'parentId = :parentId',
@@ -642,7 +617,7 @@ export class DynamoDBService {
     })
 
     try {
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.Messages,
         IndexName: 'GroupIdIndex',
         KeyConditionExpression: 'groupId = :groupId',
@@ -685,7 +660,7 @@ export class DynamoDBService {
         expressionAttributeValues[`:${key}`] = value
       })
 
-      await dynamodb.send(new UpdateCommand({
+      await this.dynamodb!.send(new UpdateCommand({
         TableName: TableNames.Messages,
         Key: { id: messageId },
         UpdateExpression: `SET ${updateExpressions.join(', ')}`,
@@ -706,7 +681,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Deleting message:', messageId)
     
     try {
-      await dynamodb.send(new DeleteCommand({
+      await this.dynamodb!.send(new DeleteCommand({
         TableName: TableNames.Messages,
         Key: { id: messageId }
       }))
@@ -737,7 +712,7 @@ export class DynamoDBService {
         expressionAttributeValues[`:${key}`] = value
       })
 
-      await dynamodb.send(new UpdateCommand({
+      await this.dynamodb!.send(new UpdateCommand({
         TableName: TableNames.Messages,
         Key: { id: replyId },
         UpdateExpression: `SET ${updateExpressions.join(', ')}`,
@@ -758,7 +733,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Deleting reply:', replyId)
     
     try {
-      await dynamodb.send(new DeleteCommand({
+      await this.dynamodb!.send(new DeleteCommand({
         TableName: TableNames.Messages,
         Key: { id: replyId }
       }))
@@ -784,7 +759,7 @@ export class DynamoDBService {
     })
     
     try {
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.Messages,
         IndexName: 'ParentMessageIndex',
         KeyConditionExpression: 'parentId = :parentId',
@@ -830,7 +805,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new PutCommand({
+      await this.dynamodb!.send(new PutCommand({
         TableName: TableNames.ThreadReadStatus,
         Item: {
           messageId,
@@ -853,7 +828,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting thread read status:', messageId)
     
     try {
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.ThreadReadStatus,
         KeyConditionExpression: 'messageId = :messageId',
         ExpressionAttributeValues: {
@@ -935,7 +910,7 @@ export class DynamoDBService {
       console.log('[DynamoDB] Getting all groups for user:', userId)
       
       // Get all groups since all users should have access to all groups
-      const result = await dynamodb.send(new ScanCommand({
+      const result = await this.dynamodb!.send(new ScanCommand({
         TableName: TableNames.GroupChats
       }))
 
@@ -974,7 +949,7 @@ export class DynamoDBService {
       }
 
       // Update group with new members
-      await dynamodb.send(new UpdateCommand({
+      await this.dynamodb!.send(new UpdateCommand({
         TableName: TableNames.GroupChats,
         Key: { id: groupId },
         UpdateExpression: 'SET members = list_append(if_not_exists(members, :empty_list), :new_members)',
@@ -999,7 +974,7 @@ export class DynamoDBService {
   }
 
   async getGroupById(groupId: string): Promise<GroupChat | null> {
-    const result = await dynamodb.send(new GetCommand({
+    const result = await this.dynamodb!.send(new GetCommand({
       TableName: TableNames.GroupChats,
       Key: { id: groupId }
     }))
@@ -1047,7 +1022,7 @@ export class DynamoDBService {
           for (const message of result.messages) {
             try {
               console.log('[DynamoDB] Deleting message:', message.id)
-              await dynamodb.send(new DeleteCommand({
+              await this.dynamodb!.send(new DeleteCommand({
                 TableName: TableNames.Messages,
                 Key: { 
                   id: message.id,
@@ -1087,7 +1062,7 @@ export class DynamoDBService {
         Key: { id: groupId }
       })
       
-      await dynamodb.send(deleteCommand)
+      await this.dynamodb!.send(deleteCommand)
       console.log('[DynamoDB] Group record deleted successfully:', groupId)
     } catch (error) {
       console.error('[DynamoDB] Error in group deletion process:', {
@@ -1148,7 +1123,7 @@ export class DynamoDBService {
         expressionAttributeValues
       })
 
-      const result = await dynamodb.send(new UpdateCommand({
+      const result = await this.dynamodb!.send(new UpdateCommand({
         TableName: TableNames.GroupChats,
         Key: { id: groupId },
         UpdateExpression: updateExpression,
@@ -1266,7 +1241,7 @@ export class DynamoDBService {
     })
     
     try {
-      await dynamodb.send(new PutCommand({
+      await this.dynamodb!.send(new PutCommand({
         TableName: TableNames.Users,
         Item: {
           id: user.id,
@@ -1314,7 +1289,7 @@ export class DynamoDBService {
       expressionAttributeNames['#updatedAt'] = 'updatedAt'
       expressionAttributeValues[':updatedAt'] = new Date().toISOString()
 
-      const result = await dynamodb.send(new UpdateCommand({
+      const result = await this.dynamodb!.send(new UpdateCommand({
         TableName: TableNames.Users,
         Key: { id: userId },
         UpdateExpression: `SET ${updateExpressions.join(', ')}`,
@@ -1343,7 +1318,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Deleting user:', userId)
     
     try {
-      await dynamodb.send(new DeleteCommand({
+      await this.dynamodb!.send(new DeleteCommand({
         TableName: TableNames.Users,
         Key: { id: userId }
       }))
@@ -1387,7 +1362,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting user by Auth0 ID:', auth0Id)
     
     try {
-      const result = await dynamodb.send(new QueryCommand({
+      const result = await this.dynamodb!.send(new QueryCommand({
         TableName: TableNames.Users,
         IndexName: 'Auth0IdIndex',
         KeyConditionExpression: 'auth0Id = :auth0Id',
@@ -1415,7 +1390,7 @@ export class DynamoDBService {
     console.log('[DynamoDB] Getting all groups')
     
     try {
-      const result = await dynamodb.send(new ScanCommand({
+      const result = await this.dynamodb!.send(new ScanCommand({
         TableName: TableNames.GroupChats
       }))
       
