@@ -258,43 +258,80 @@ export class DynamoDBService {
       try {
         logger.info(`[DynamoDB] Connection attempt #${attempt}`, {
           region: this.config.region,
-          tableName: this.config.tableName,
           attempt,
           maxRetries
         });
         
-        // Test all tables to ensure complete connectivity
-        const tables = [TableNames.GroupChats, TableNames.Messages, TableNames.Users];
+        // First test basic connectivity with the primary table
+        const primaryTable = TableNames.GroupChats;
+        logger.info(`[DynamoDB] Testing primary table connection: ${primaryTable}`);
         
-        for (const table of tables) {
-          const params = {
-            TableName: table
-          };
-          
-          const command = new DescribeTableCommand(params);
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error('Connection timeout')), CONNECTION_TIMEOUT_MS);
-          });
+        const primaryParams = {
+          TableName: primaryTable
+        };
+        
+        const command = new DescribeTableCommand(primaryParams);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Connection timeout')), CONNECTION_TIMEOUT_MS);
+        });
 
-          const result = await Promise.race([
-            this.client.send(command),
-            timeoutPromise
-          ]) as DescribeTableCommandOutput;
+        const result = await Promise.race([
+          this.client.send(command),
+          timeoutPromise
+        ]) as DescribeTableCommandOutput;
 
-          logger.info(`[DynamoDB] Table check successful:`, {
-            table,
-            status: result.Table?.TableStatus,
-            itemCount: result.Table?.ItemCount
-          });
+        logger.info(`[DynamoDB] Primary table check successful:`, {
+          table: primaryTable,
+          status: result.Table?.TableStatus,
+          itemCount: result.Table?.ItemCount
+        });
+
+        // If primary connection succeeds, try other tables but don't fail if they don't exist
+        const additionalTables = [TableNames.Messages, TableNames.Users];
+        
+        for (const table of additionalTables) {
+          try {
+            logger.info(`[DynamoDB] Checking additional table: ${table}`);
+            const params = {
+              TableName: table
+            };
+            
+            const tableResult = await Promise.race([
+              this.client.send(new DescribeTableCommand(params)),
+              timeoutPromise
+            ]) as DescribeTableCommandOutput;
+
+            logger.info(`[DynamoDB] Additional table check successful:`, {
+              table,
+              status: tableResult.Table?.TableStatus,
+              itemCount: tableResult.Table?.ItemCount
+            });
+          } catch (tableError) {
+            const typedError = tableError as Error & {
+              code?: string;
+              name?: string;
+            };
+            
+            // Log but don't fail for additional tables
+            logger.warn(`[DynamoDB] Additional table check warning:`, {
+              table,
+              error: typedError.message,
+              code: typedError.code,
+              name: typedError.name,
+              // Don't fail initialization if table doesn't exist yet
+              willContinue: true
+            });
+          }
         }
 
-        logger.info(`[DynamoDB] All tables verified successfully on attempt ${attempt}`);
+        logger.info(`[DynamoDB] Connection verification completed on attempt ${attempt}`);
         return;
       } catch (error) {
         const typedError = error as Error & {
           code?: string;
           statusCode?: number;
           requestId?: string;
+          name?: string;
         };
 
         const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 5000);
@@ -302,15 +339,14 @@ export class DynamoDBService {
         logger.error(`[DynamoDB] Connection attempt ${attempt} failed:`, {
           error: typedError.message,
           code: typedError.code,
+          name: typedError.name,
           statusCode: typedError.statusCode,
           requestId: typedError.requestId,
           region: this.config.region,
           nextRetryIn: attempt < maxRetries ? `${delay}ms` : 'no more retries',
           credentials: {
             hasAccessKey: !!this.config.credentials.accessKeyId,
-            hasSecretKey: !!this.config.credentials.secretAccessKey,
-            accessKeyLength: this.config.credentials.accessKeyId?.length,
-            secretKeyLength: this.config.credentials.secretAccessKey?.length
+            hasSecretKey: !!this.config.credentials.secretAccessKey
           }
         });
 
