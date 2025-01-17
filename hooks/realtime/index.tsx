@@ -4,6 +4,7 @@ import { useEffect, useCallback, createContext, useContext, ReactNode, useState 
 import { io, Socket } from 'socket.io-client'
 import { useToast } from '@/components/ui/use-toast'
 import { Message, MessageReaction } from '@/types/models/message'
+import getConfig from 'next/config'
 
 interface MessageData {
   message: {
@@ -77,7 +78,9 @@ export function SocketProvider({ children }: SocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL
+    const { publicRuntimeConfig } = getConfig()
+    const apiUrl = publicRuntimeConfig.NEXT_PUBLIC_API_URL
+    
     if (!apiUrl) {
       console.error('[Socket] NEXT_PUBLIC_API_URL is not defined')
       return
