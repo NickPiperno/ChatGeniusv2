@@ -90,8 +90,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    logger.info('[GROUPS_POST] Starting group creation')
+    
     const dynamoDb = await getDynamoDBService()
     if (!dynamoDb) {
+      logger.error('[GROUPS_POST] DynamoDB service not initialized')
       return NextResponse.json({ 
         error: 'Database service unavailable',
         details: 'Please check AWS credentials and configuration'
@@ -99,7 +102,14 @@ export async function POST(request: Request) {
     }
 
     // Check if groups table is configured
+    logger.info('[GROUPS_POST] Environment check:', {
+      hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+      groupsTableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+      region: process.env.AWS_REGION
+    })
+
     if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
+      logger.error('[GROUPS_POST] Groups table not configured')
       return NextResponse.json({ 
         error: 'Groups functionality not available',
         details: 'Groups table not configured'
@@ -108,7 +118,7 @@ export async function POST(request: Request) {
 
     const session = await getSession()
     if (!session?.user?.sub) {
-      logger.warn('Unauthorized group creation attempt - no user ID')
+      logger.warn('[GROUPS_POST] Unauthorized group creation attempt - no user ID')
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
     const userId = session.user.sub
@@ -117,12 +127,20 @@ export async function POST(request: Request) {
     const { name } = body
 
     if (!name) {
+      logger.warn('[GROUPS_POST] Missing group name')
       return NextResponse.json({ error: 'Name is required' }, { status: 400 })
     }
 
-    logger.info('Creating group', { name, userId })
+    const groupId = crypto.randomUUID()
+    logger.info('[GROUPS_POST] Creating group:', { 
+      groupId,
+      name, 
+      userId,
+      tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
+    })
+
     const group = await dynamoDb.createGroupChat({
-      id: crypto.randomUUID(),
+      id: groupId,
       name,
       userId,
       members: [userId], // Initially just the creator
@@ -130,9 +148,25 @@ export async function POST(request: Request) {
       updatedAt: new Date().toISOString()
     })
 
+    logger.info('[GROUPS_POST] Group created successfully:', {
+      groupId: group.id,
+      name: group.name,
+      members: group.members
+    })
+
     return NextResponse.json(group)
   } catch (error) {
-    logger.error('[GROUPS_POST] Error:', error)
+    logger.error('[GROUPS_POST] Error:', {
+      error,
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      env: {
+        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        groupsTableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        region: process.env.AWS_REGION,
+        nodeEnv: process.env.NODE_ENV
+      }
+    })
     return NextResponse.json({ 
       error: 'Failed to create group',
       details: error instanceof Error ? error.message : 'Unknown error'

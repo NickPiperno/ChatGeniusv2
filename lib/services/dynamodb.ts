@@ -499,19 +499,43 @@ export class DynamoDBService {
 
   // Group Chats
   async createGroupChat(groupChat: GroupChat): Promise<GroupChat> {
-    await this.dynamodb!.send(new PutCommand({
-      TableName: TableNames.GroupChats,
-      Item: {
+    logger.info('[DynamoDB] Creating group chat:', {
+      id: groupChat.id,
+      name: groupChat.name,
+      members: groupChat.members,
+      tableName: TableNames.GroupChats
+    })
+
+    try {
+      await this.dynamodb!.send(new PutCommand({
+        TableName: TableNames.GroupChats,
+        Item: {
+          id: groupChat.id,
+          name: groupChat.name,
+          userId: groupChat.userId,
+          members: groupChat.members,
+          createdAt: groupChat.createdAt,
+          updatedAt: groupChat.updatedAt,
+          metadata: groupChat.metadata || {}
+        }
+      }))
+
+      logger.info('[DynamoDB] Group chat created successfully:', {
         id: groupChat.id,
-        name: groupChat.name,
-        userId: groupChat.userId,
-        members: groupChat.members,
-        createdAt: groupChat.createdAt,
-        updatedAt: groupChat.updatedAt,
-        metadata: groupChat.metadata || {}
-      }
-    }))
-    return groupChat
+        name: groupChat.name
+      })
+
+      return groupChat
+    } catch (error) {
+      logger.error('[DynamoDB] Error creating group chat:', {
+        error,
+        groupId: groupChat.id,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        tableName: TableNames.GroupChats
+      })
+      throw error
+    }
   }
 
   // Users
@@ -915,11 +939,14 @@ export class DynamoDBService {
 
   async getGroupsByUserId(userId: string): Promise<GroupChat[]> {
     try {
-      console.log('[DynamoDB] Getting all groups for user:', userId)
+      logger.info('[DynamoDB] Getting all groups for user:', {
+        userId,
+        tableName: TableNames.GroupChats
+      })
       
       // Check if groups table is available
       if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
-        console.log('[DynamoDB] Groups table not configured, returning empty array')
+        logger.warn('[DynamoDB] Groups table not configured, returning empty array')
         return []
       }
 
@@ -931,14 +958,21 @@ export class DynamoDBService {
       }))
 
       const groups = (result.Items || []) as GroupChat[]
-      console.log('[DynamoDB] Found groups:', {
+      logger.info('[DynamoDB] Found groups:', {
         count: groups.length,
-        groups: groups.map(g => ({ id: g.id, name: g.name }))
+        groups: groups.map(g => ({ id: g.id, name: g.name })),
+        tableName: TableNames.GroupChats
       })
 
       return groups
     } catch (error) {
-      console.error('[DynamoDB] Error getting groups:', error)
+      logger.error('[DynamoDB] Error getting groups:', {
+        error,
+        userId,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        tableName: TableNames.GroupChats
+      })
       throw error
     }
   }
