@@ -92,23 +92,75 @@ export class DynamoDBService {
     logger.info('[DynamoDB] Constructor called:', {
       hasInstance: !!instance,
       isInitialized: instance?.isInitialized || false,
-      hasInitializationPromise: !!instance?.initializationPromise
+      hasInitializationPromise: !!instance?.initializationPromise,
+      environment: {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        railwayRegion: process.env.RAILWAY_REGION,
+        awsRegion: process.env.AWS_REGION,
+        tables: {
+          messages: process.env.DYNAMODB_MESSAGES_TABLE,
+          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          users: process.env.DYNAMODB_USERS_TABLE
+        }
+      }
     });
 
     if (instance) {
+      logger.info('[DynamoDB] Returning existing instance:', {
+        isInitialized: instance.isInitialized,
+        hasClient: !!instance.dynamodb
+      });
       return instance;
     }
 
     instance = this;
     // Start initialization immediately
     this.initializationPromise = this.initializeClient();
+    
+    // Add initialization status check
+    this.initializationPromise
+      .then(() => {
+        logger.info('[DynamoDB] Initialization completed successfully:', {
+          isInitialized: this.isInitialized,
+          hasClient: !!this.dynamodb,
+          config: {
+            region: this.clientConfig?.region,
+            hasCredentials: !!this.clientConfig?.credentials
+          }
+        });
+      })
+      .catch((error) => {
+        logger.error('[DynamoDB] Initialization failed:', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined,
+          environment: {
+            nodeEnv: process.env.NODE_ENV,
+            isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+            railwayRegion: process.env.RAILWAY_REGION,
+            awsRegion: process.env.AWS_REGION
+          }
+        });
+      });
   }
 
   private async initializeClient() {
+    const startTime = Date.now();
     logger.info('[DynamoDB] InitializeClient called:', {
       isInitialized: this.isInitialized,
       hasDynamoDB: !!this.dynamodb,
-      hasInitializationPromise: !!this.initializationPromise
+      hasInitializationPromise: !!this.initializationPromise,
+      environment: {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        railwayRegion: process.env.RAILWAY_REGION,
+        awsRegion: process.env.AWS_REGION,
+        tables: {
+          messages: process.env.DYNAMODB_MESSAGES_TABLE,
+          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          users: process.env.DYNAMODB_USERS_TABLE
+        }
+      }
     });
 
     // Only try to initialize once
@@ -116,6 +168,7 @@ export class DynamoDBService {
       logger.warn('[DynamoDB] Client already initialized, skipping initialization:', {
         isInitialized: this.isInitialized,
         hasDynamoDB: !!this.dynamodb,
+        initializationTime: Date.now() - startTime,
         clientConfig: {
           region: this.clientConfig?.region,
           hasCredentials: !!this.clientConfig?.credentials
