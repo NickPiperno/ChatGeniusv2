@@ -38,16 +38,47 @@ const app = next({ dev, hostname, port })
 const handle = app.getRequestHandler()
 
 // Initialize DynamoDB service
-const dynamoDb = new DynamoDBService()
+let dynamoDb: DynamoDBService;
+
+async function getDynamoDBInstance() {
+  if (!dynamoDb) {
+    logger.info('[Server] Creating DynamoDB instance...');
+    dynamoDb = new DynamoDBService();
+    // Wait for initialization to complete
+    await (dynamoDb as any).initializationPromise;
+    logger.info('[Server] DynamoDB instance ready:', {
+      isInitialized: dynamoDb.isInitialized
+    });
+  }
+  return dynamoDb;
+}
 
 export async function createCombinedServer() {
   await app.prepare()
+
+  // Initialize DynamoDB before creating server
+  try {
+    dynamoDb = await getDynamoDBInstance();
+    logger.info('[Server] DynamoDB initialized successfully');
+  } catch (error) {
+    logger.error('[Server] Failed to initialize DynamoDB:', {
+      error,
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    // Continue server creation even if DynamoDB fails
+  }
+
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true)
       await handle(req, res, parsedUrl)
     } catch (err) {
-      console.error('Error occurred handling', req.url, err)
+      logger.error('Error occurred handling request:', {
+        url: req.url,
+        error: err instanceof Error ? err.message : 'Unknown error',
+        stack: err instanceof Error ? err.stack : undefined
+      });
       res.statusCode = 500
       res.end('internal server error')
     }
