@@ -85,13 +85,16 @@ export function SocketProvider({ children }: SocketProviderProps) {
 
     console.log('[Socket] Connecting to:', apiUrl)
     const newSocket = io(apiUrl, {
-      withCredentials: true,
       transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 10,
+      path: '/api/socketio',
+      reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000
+      autoConnect: true,
+      forceNew: true,
+      ...(apiUrl.includes('localhost') && {
+        withCredentials: false,
+        timeout: 10000
+      })
     })
 
     newSocket.on('connect', () => {

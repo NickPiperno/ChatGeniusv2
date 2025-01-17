@@ -98,9 +98,13 @@ export async function createCombinedServer() {
     }
   })
 
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
+  const io = new Server(server, {
+    path: '/api/socketio',
+    transports: ['websocket', 'polling'],
     cors: {
-      origin: process.env.NEXT_PUBLIC_API_URL,
+      origin: process.env.NODE_ENV === 'development' 
+        ? 'http://localhost:3000'
+        : process.env.NEXT_PUBLIC_API_URL,
       methods: ['GET', 'POST'],
       credentials: true
     }
