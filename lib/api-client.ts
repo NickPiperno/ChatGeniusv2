@@ -1,9 +1,11 @@
 export function getBaseUrl() {
-  if (!process.env.NEXT_PUBLIC_API_URL) {
-    console.error('NEXT_PUBLIC_API_URL is not defined');
-    return '';
+  // In production, use the Railway URL
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://chatgeniusv2-production.up.railway.app';
   }
-  return process.env.NEXT_PUBLIC_API_URL;
+  
+  // In development, use the environment variable or localhost
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 }
 
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
