@@ -101,12 +101,19 @@ export class DynamoDBService {
     this.initializeClient();
   }
 
-  private initializeClient() {
+  private async initializeClient() {
     try {
-      logger.info('[DynamoDB] Initializing DynamoDB service...', {
+      logger.info('[DynamoDB] Starting service initialization...', {
         nodeEnv: process.env.NODE_ENV,
         isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        region: process.env.AWS_REGION
+        region: process.env.AWS_REGION,
+        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+        tables: {
+          messages: process.env.DYNAMODB_MESSAGES_TABLE,
+          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          users: process.env.DYNAMODB_USERS_TABLE
+        }
       });
 
       // Store the client configuration
@@ -118,26 +125,63 @@ export class DynamoDBService {
         }
       };
 
+      logger.info('[DynamoDB] Creating DynamoDB client with config:', {
+        region: this.clientConfig.region,
+        hasCredentials: !!this.clientConfig.credentials,
+        credentialsLength: {
+          accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+          secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+        }
+      });
+
       const client = new DynamoDBClient(this.clientConfig);
       this.dynamodb = DynamoDBDocumentClient.from(client);
-      this.isInitialized = true;
       
-      logger.info('[DynamoDB] Service initialized successfully');
+      // Test the connection immediately
+      logger.info('[DynamoDB] Testing connection...');
+      const isConnected = await this.testConnection();
+      this.isInitialized = isConnected;
+      
+      if (isConnected) {
+        logger.info('[DynamoDB] Service initialized and connected successfully');
+      } else {
+        logger.error('[DynamoDB] Service initialized but connection test failed');
+      }
     } catch (error) {
-      logger.error('[DynamoDB] Error initializing service:', {
+      logger.error('[DynamoDB] Error during service initialization:', {
         error,
         message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
+        stack: error instanceof Error ? error.stack : undefined,
+        config: {
+          region: this.clientConfig?.region,
+          hasCredentials: !!this.clientConfig?.credentials,
+          credentialsLength: {
+            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+          }
+        }
       });
       this.isInitialized = false;
+      throw error;
     }
   }
 
   private ensureInitialized() {
+    logger.info('[DynamoDB] Checking initialization status:', {
+      isInitialized: this.isInitialized,
+      hasDynamoDB: !!this.dynamodb,
+      hasConfig: !!this.clientConfig,
+      configDetails: this.clientConfig ? {
+        region: this.clientConfig.region,
+        hasCredentials: !!this.clientConfig.credentials
+      } : 'No config'
+    });
+
     if (!this.isInitialized || !this.dynamodb) {
       logger.warn('[DynamoDB] Service not initialized, attempting to reinitialize...');
       this.initializeClient();
       if (!this.isInitialized || !this.dynamodb) {
+        logger.error('[DynamoDB] Reinitialization failed');
         throw new Error('DynamoDB service failed to initialize');
       }
     }
@@ -199,22 +243,58 @@ export class DynamoDBService {
   async send<T = any>(command: any): Promise<T> {
     this.ensureInitialized();
     
-    console.log('[DynamoDB] Executing command:', {
-      commandName: command?.constructor?.name,
-      tableName: command?.input?.TableName
-    })
-    
     try {
-      const result = await this.dynamodb!.send(command)
-      console.log('[DynamoDB] Command executed successfully')
-      return result as T
+      logger.info('[DynamoDB] Preparing to execute command:', {
+        commandName: command?.constructor?.name,
+        tableName: command?.input?.TableName,
+        config: {
+          region: this.clientConfig.region,
+          hasCredentials: !!this.clientConfig.credentials,
+          credentialsLength: {
+            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+          }
+        },
+        commandInput: command?.input ? {
+          ...command.input,
+          // Mask any sensitive data
+          Item: command.input.Item ? 'Present' : undefined,
+          Key: command.input.Key ? 'Present' : undefined
+        } : 'No input'
+      });
+      
+      const result = await this.dynamodb!.send(command);
+      logger.info('[DynamoDB] Command executed successfully:', {
+        commandName: command?.constructor?.name,
+        hasResult: !!result,
+        resultKeys: result ? Object.keys(result) : []
+      });
+      return result as T;
     } catch (error) {
-      console.error('[DynamoDB] Command execution failed:', {
+      logger.error('[DynamoDB] Command execution failed:', {
+        error,
         name: error instanceof Error ? error.name : 'Unknown',
         message: error instanceof Error ? error.message : 'Unknown error',
-        command: command?.constructor?.name
-      })
-      throw error
+        stack: error instanceof Error ? error.stack : undefined,
+        command: {
+          name: command?.constructor?.name,
+          input: command?.input ? {
+            ...command.input,
+            // Mask any sensitive data
+            Item: command.input.Item ? 'Present' : undefined,
+            Key: command.input.Key ? 'Present' : undefined
+          } : 'No input'
+        },
+        config: {
+          region: this.clientConfig.region,
+          hasCredentials: !!this.clientConfig.credentials,
+          credentialsLength: {
+            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+          }
+        }
+      });
+      throw error;
     }
   }
 
@@ -1520,6 +1600,35 @@ export class DynamoDBService {
     } catch (error) {
       console.error('[DynamoDB] Error updating groups with users:', error)
       throw error
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      this.ensureInitialized();
+      
+      // Try to describe the Messages table as a test
+      await this.send(new DescribeTableCommand({
+        TableName: TableNames.Messages
+      }));
+      
+      logger.info('[DynamoDB] Connection test successful');
+      return true;
+    } catch (error) {
+      logger.error('[DynamoDB] Connection test failed:', {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        config: {
+          region: this.clientConfig.region,
+          hasCredentials: !!this.clientConfig.credentials,
+          tables: {
+            messages: TableNames.Messages,
+            groups: TableNames.GroupChats,
+            users: TableNames.Users
+          }
+        }
+      });
+      return false;
     }
   }
 }
