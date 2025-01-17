@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
+import { logger } from '@/lib/logger'
 
-const dynamoDb = new DynamoDBService()
+let dynamoDb: DynamoDBService | null = null;
+
+async function getDynamoDBInstance() {
+  if (!dynamoDb) {
+    logger.info('[Messages API] Initializing DynamoDB instance...');
+    dynamoDb = await DynamoDBService.getInstance();
+    logger.info('[Messages API] DynamoDB instance ready');
+  }
+  return dynamoDb;
+}
 
 // GET /api/groups/[groupId]/messages
 export async function GET(
@@ -16,10 +26,14 @@ export async function GET(
 
     const { groupId } = params
     
-    const messages = await dynamoDb.getMessagesByGroup(groupId)
+    const db = await getDynamoDBInstance();
+    const messages = await db.getMessagesForGroup(groupId)
     return NextResponse.json(messages)
   } catch (error) {
-    console.error('Error in GET /api/groups/[groupId]/messages:', error)
+    logger.error('Error in GET /api/groups/[groupId]/messages:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
     return new NextResponse(
       error instanceof Error ? error.message : 'Internal Server Error',
       { status: 500 }
@@ -43,13 +57,17 @@ export async function POST(
     const message = {
       ...data,
       groupId,
-      timestamp: Date.now()
+      timestamp: new Date().toISOString()
     }
 
-    const savedMessage = await dynamoDb.createMessage(message)
+    const db = await getDynamoDBInstance();
+    const savedMessage = await db.createMessage(message)
     return NextResponse.json(savedMessage)
   } catch (error) {
-    console.error('Error in POST /api/groups/[groupId]/messages:', error)
+    logger.error('Error in POST /api/groups/[groupId]/messages:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
     return new NextResponse(
       error instanceof Error ? error.message : 'Internal Server Error',
       { status: 500 }

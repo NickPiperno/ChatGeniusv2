@@ -1,1830 +1,1048 @@
 import { 
-  DynamoDBClient,
+  DynamoDBClient, 
+  DynamoDBClientConfig,
   DescribeTableCommand,
-  ResourceNotFoundException
-} from '@aws-sdk/client-dynamodb'
-import { 
-  DynamoDBDocumentClient, 
-  GetCommand, 
-  PutCommand, 
+  DescribeTableCommandOutput,
+  ScanCommand,
+  ScanCommandOutput,
+  GetItemCommand,
   QueryCommand,
-  UpdateCommand,
-  DeleteCommand,
-  ScanCommand
-} from '@aws-sdk/lib-dynamodb'
-import { Message, MessageReaction, MessageUpdate } from '@/types/models/message'
-import { User } from '@/types/models/user'
-import { GroupChat, TypingIndicator, Reaction } from '@/types/models/dynamodb'
-import { ThreadReadStatus } from '@/types/models/thread'
-import { logger } from '@/lib/logger'
+  UpdateItemCommand,
+  AttributeValue,
+  PutItemCommand,
+  DeleteItemCommand
+} from '@aws-sdk/client-dynamodb';
+import { AwsCredentialIdentity } from '@aws-sdk/types';
+import { logger } from '../logger';
+import { Message, MessageAttachment } from '../../types/models/message';
 
-interface DynamoDBMessage extends Omit<Message, 'reactions'> {
-  reactions: Record<string, MessageReaction>
-}
-
-// Add region validation
-const RAILWAY_TO_AWS_REGIONS: Record<string, string> = {
-  'us-east': 'us-east-1',
-  'us-west': 'us-west-1',
-  'eu-west': 'eu-west-1',
-  'ap-south': 'ap-south-1'
-};
-
-// Initialize DynamoDB client
-console.log('[DynamoDB] Environment check:', {
-  hasRegion: !!process.env.AWS_REGION,
-  hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-  hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-  hasMessagesTable: !!process.env.DYNAMODB_MESSAGES_TABLE,
-  hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
-  region: process.env.AWS_REGION,
-  messagesTable: process.env.DYNAMODB_MESSAGES_TABLE || 'dev_Messages-np',
-  groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats'
-})
-
-// Move credential validation to initializeClient
+// Table names until we can import from constants
 const TableNames = {
-  Messages: process.env.DYNAMODB_MESSAGES_TABLE || 'dev_Messages-np',
-  GroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats',
-  Users: process.env.DYNAMODB_USERS_TABLE || 'dev_Users',
-  FileMetadata: process.env.DYNAMODB_FILE_METADATA_TABLE || 'dev_FileMetadata',
-  Notifications: process.env.DYNAMODB_NOTIFICATIONS_TABLE || 'dev_Notifications',
-  UserStatus: process.env.DYNAMODB_USER_STATUS_TABLE || 'dev_UserStatus',
-  TypingIndicators: process.env.DYNAMODB_TYPING_INDICATORS_TABLE || 'dev_TypingIndicators',
-  Reactions: process.env.DYNAMODB_REACTIONS_TABLE || 'dev_Reactions',
-  PinnedMessages: process.env.DYNAMODB_PINNED_MESSAGES_TABLE || 'dev_PinnedMessages',
-  Mentions: process.env.DYNAMODB_MENTIONS_TABLE || 'dev_Mentions',
-  ThreadReadStatus: process.env.DYNAMODB_THREAD_READ_STATUS_TABLE || 'dev_ThreadReadStatus'
+  GroupChats: process.env.DYNAMODB_TABLE_GROUPS || 'groups',
+  Messages: process.env.DYNAMODB_TABLE_MESSAGES || 'messages',
+  Users: process.env.DYNAMODB_TABLE_USERS || 'users'
 };
 
-// Make convertToMessage function public
-export function convertToMessage(item: DynamoDBMessage): Message {
-  return {
-    id: item.id,
-    groupId: item.groupId,
-    content: item.content,
-    userId: item.userId,
-    displayName: item.displayName,
-    imageUrl: item.imageUrl || '',
-    timestamp: item.timestamp,
-    reactions: item.reactions || {},
-    attachments: item.attachments || [],
-    metadata: item.metadata || {},
-    replyCount: item.replyCount || 0,
-    ...(item.parentId && { parentId: item.parentId }),
-    sender: {
-      id: item.userId,
-      displayName: item.displayName,
-      imageUrl: item.imageUrl || ''
-    },
-    replies: []
-  }
+const CONNECTION_TIMEOUT_MS = 5000;
+const OPERATION_TIMEOUT_MS = 10000;
+
+interface ConnectionMetrics {
+  startTime: number;
+  initDuration?: number;
+  lastAttemptDuration?: number;
+  totalAttempts: number;
+  lastError?: string;
 }
 
-// Singleton instance with initialization state
-let instance: DynamoDBService | null = null;
-let initializationPromise: Promise<void> | null = null;
+interface DynamoDBConfig {
+  region: string;
+  credentials: AwsCredentialIdentity;
+  tableName: string;
+}
+
+interface GroupItem {
+  userId: { S: string };
+  groupId: { S: string };
+  name: { S: string };
+  createdAt: { S: string };
+  members?: { SS: string[] };
+  [key: string]: { S: string } | { N: string } | { BOOL: boolean } | { SS: string[] } | undefined;
+}
+
+interface UserItem {
+  id: { S: string };
+  email: { S: string };
+  name: { S: string };
+  createdAt: { S: string };
+  status?: { S: 'online' | 'away' | 'busy' | 'offline' };
+}
+
+interface UserCreateInput {
+  id: string;
+  email: string;
+  auth0Id: string;
+  displayName: string;
+  imageUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  lastActiveAt: number;
+}
+
+interface GroupChatCreateInput {
+  id: string;
+  name: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+  members: string[];
+  metadata: Record<string, any>;
+}
+
+interface MessageInput {
+  id: string;
+  content: string;
+  userId: string;
+  displayName: string;
+  imageUrl: string;
+  groupId: string;
+  timestamp: string;
+  reactions: Record<string, any>;
+  attachments: any[];
+  metadata: Record<string, any>;
+  replyCount: number;
+  parentId?: string;
+  sender: {
+    id: string;
+    displayName: string;
+    imageUrl: string;
+  };
+  replies: any[];
+}
+
+export interface MessageItem {
+  id: { S: string };
+  content: { S: string };
+  userId: { S: string };
+  displayName: { S: string };
+  imageUrl: { S: string };
+  groupId: { S: string };
+  timestamp: { S: string };
+  reactions: { M: Record<string, AttributeValue> };
+  attachments: { L: AttributeValue[] };
+  metadata: { M: Record<string, AttributeValue> };
+  replyCount: { N: string };
+  parentId?: { S: string };
+  sender: { M: Record<string, AttributeValue> };
+  replies: { L: AttributeValue[] };
+}
+
+interface UserUpdateInput {
+  displayName?: string;
+  imageUrl?: string;
+  lastActiveAt?: number;
+  status?: 'online' | 'away' | 'busy' | 'offline';
+}
+
+export function convertToMessage(item: MessageItem): Message {
+  const sender = item.sender.M;
+  if (!sender.id?.S || !sender.displayName?.S || !sender.imageUrl?.S) {
+    throw new Error('Invalid sender data in message item');
+  }
+
+    return {
+    id: item.id.S,
+    groupId: item.groupId.S,
+    content: item.content.S,
+    userId: item.userId.S,
+    displayName: item.displayName.S,
+    imageUrl: item.imageUrl.S,
+    timestamp: item.timestamp.S,
+    reactions: item.reactions.M,
+    attachments: item.attachments.L.map((a: AttributeValue) => a.M as unknown as MessageAttachment),
+    metadata: item.metadata.M,
+    replyCount: parseInt(item.replyCount.N),
+    parentId: item.parentId?.S,
+      sender: {
+      id: sender.id.S,
+      displayName: sender.displayName.S,
+      imageUrl: sender.imageUrl.S
+      },
+      replies: []
+    }
+  }
 
 export class DynamoDBService {
   private static instance: DynamoDBService | null = null;
   private initializationPromise: Promise<void> | null = null;
-  private dynamodb: DynamoDBDocumentClient | null = null;
-  private clientConfig: any;
-  public isInitialized = false;
+  private client: DynamoDBClient;
+  private config: DynamoDBConfig;
+  private metrics: ConnectionMetrics = {
+    startTime: Date.now(),
+    totalAttempts: 0
+  };
 
-  constructor() {
-    if (DynamoDBService.instance) {
-      return DynamoDBService.instance;
+  private constructor() {
+    // Ensure credentials are provided
+    const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    
+    if (!accessKeyId || !secretAccessKey) {
+      throw new Error('AWS credentials are required');
     }
 
-    // Ensure we don't create multiple instances during initialization
-    if (this.initializationPromise) {
-      throw new Error('DynamoDB service is already initializing');
-    }
+    this.config = {
+      region: process.env.AWS_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId,
+        secretAccessKey
+      },
+      tableName: TableNames.GroupChats
+    };
 
-    DynamoDBService.instance = this;
-    this.initializationPromise = this.initializeClient().catch(error => {
-      // Reset state on initialization failure
-      DynamoDBService.instance = null;
-      this.initializationPromise = null;
-      throw error;
-    });
+    const clientConfig: DynamoDBClientConfig = {
+      region: this.config.region,
+      credentials: this.config.credentials
+    };
+
+    this.client = new DynamoDBClient(clientConfig);
   }
 
-  // Static method to get instance
   public static async getInstance(): Promise<DynamoDBService> {
     if (!DynamoDBService.instance) {
       DynamoDBService.instance = new DynamoDBService();
+      await DynamoDBService.instance.initialize();
     }
-    
-    // Wait for initialization if it's in progress
-    if (DynamoDBService.instance.initializationPromise) {
-      await DynamoDBService.instance.initializationPromise;
-    }
-
-    if (!DynamoDBService.instance.isInitialized) {
-      throw new Error('DynamoDB service failed to initialize');
-    }
-
     return DynamoDBService.instance;
   }
 
-  private async initializeClient() {
-    // Only initialize once
-    if (this.isInitialized || this.dynamodb) {
-      return;
-    }
-
-    try {
-      // Add region validation logging
-      const railwayRegion = process.env.RAILWAY_REGION;
-      const configuredAwsRegion = process.env.AWS_REGION;
-      const expectedAwsRegion = railwayRegion ? RAILWAY_TO_AWS_REGIONS[railwayRegion] : null;
-
-      logger.info('[DynamoDB] Region configuration:', {
-        railwayRegion,
-        configuredAwsRegion,
-        expectedAwsRegion,
-        isMatch: expectedAwsRegion === configuredAwsRegion,
-        allEnvironment: {
-          RAILWAY_REGION: process.env.RAILWAY_REGION,
-          RAILWAY_ENVIRONMENT_NAME: process.env.RAILWAY_ENVIRONMENT_NAME,
-          AWS_REGION: process.env.AWS_REGION,
-          NODE_ENV: process.env.NODE_ENV
-        }
-      });
-
-      // Warn if regions don't match
-      if (expectedAwsRegion && expectedAwsRegion !== configuredAwsRegion) {
-        logger.warn('[DynamoDB] Region mismatch detected:', {
-          message: 'AWS region does not match Railway region',
-          railwayRegion,
-          configuredAwsRegion,
-          expectedAwsRegion,
-          recommendation: 'Consider updating AWS_REGION to match Railway region'
-        });
-      }
-
-      logger.info('[DynamoDB] Starting service initialization...', {
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        region: process.env.AWS_REGION,
-        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY
-      });
-
-      // Validate credentials
-      if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
-        const missingCreds = {
-          accessKey: !process.env.AWS_ACCESS_KEY_ID,
-          secretKey: !process.env.AWS_SECRET_ACCESS_KEY,
-          region: !process.env.AWS_REGION
-        };
-        
-        throw new Error(`Missing AWS credentials: ${Object.entries(missingCreds)
-          .filter(([_, isMissing]) => isMissing)
-          .map(([key]) => key)
-          .join(', ')}`);
-      }
-
-      // Add network diagnostic information
-      const networkInfo = {
-        railway: {
-          region: process.env.RAILWAY_REGION,
-          environment: process.env.RAILWAY_ENVIRONMENT_NAME,
-          projectId: process.env.RAILWAY_PROJECT_ID,
-          serviceId: process.env.RAILWAY_SERVICE_ID
-        },
-        aws: {
-          region: process.env.AWS_REGION,
-          endpoint: `dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
-          credentialsPresent: !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
-        }
-      };
-
-      logger.info('[DynamoDB] Network configuration:', networkInfo);
-
-      // Initialize client with enhanced logging
-      this.clientConfig = {
-        region: process.env.AWS_REGION,
-        credentials: {
-          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-        }
-      };
-
-      const client = new DynamoDBClient(this.clientConfig);
-      this.dynamodb = DynamoDBDocumentClient.from(client);
-
-      // Test connection with enhanced diagnostics
-      let isConnected = false;
-      let lastError: Error | undefined;
-      
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          const startTime = Date.now();
-          isConnected = await this.testConnection();
-          const endTime = Date.now();
-          
-          logger.info('[DynamoDB] Connection attempt result:', {
-            attempt,
-            success: isConnected,
-            latencyMs: endTime - startTime,
-            networkInfo
-          });
-
-          if (isConnected) break;
-          
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error('Unknown error');
-          logger.warn('[DynamoDB] Connection attempt failed:', { 
-            attempt,
-            error: lastError,
-            networkInfo,
-            errorDetails: {
-              name: error instanceof Error ? error.name : 'Unknown',
-              message: error instanceof Error ? error.message : 'Unknown error',
-              code: (error as any)?.code,
-              statusCode: (error as any)?.statusCode,
-              requestId: (error as any)?.requestId
-            }
-          });
-          
-          if (attempt < 3) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-          }
-        }
-      }
-
-      if (!isConnected) {
-        throw lastError || new Error('Failed to connect to DynamoDB after multiple attempts');
-      }
-
-      this.isInitialized = true;
-      logger.info('[DynamoDB] Service initialized successfully');
-
-    } catch (error) {
-      this.dynamodb = null;
-      this.isInitialized = false;
-      initializationPromise = null;
-      instance = null;
-      
-      logger.error('[DynamoDB] Service initialization failed:', {
-        error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      });
-      
-      throw error;
-    }
-  }
-
-  private async ensureInitialized() {
-    logger.info('[DynamoDB] EnsureInitialized called:', {
-      isInitialized: this.isInitialized,
-      hasDynamoDB: !!this.dynamodb,
-      hasInitializationPromise: !!this.initializationPromise,
-      clientConfig: this.clientConfig ? {
-        region: this.clientConfig.region,
-        hasCredentials: !!this.clientConfig.credentials
-      } : 'No config'
-    });
-
-    // Wait for any ongoing initialization
+  private async initialize(): Promise<void> {
     if (this.initializationPromise) {
-      logger.info('[DynamoDB] Waiting for ongoing initialization...');
-      await this.initializationPromise;
-      logger.info('[DynamoDB] Initialization completed:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb
-      });
+      return this.initializationPromise;
     }
 
-    // If not initialized and no initialization in progress, start one
-    if (!this.isInitialized && !this.initializationPromise) {
-      logger.info('[DynamoDB] Starting new initialization...');
-      this.initializationPromise = this.initializeClient();
-      await this.initializationPromise;
-      logger.info('[DynamoDB] New initialization completed:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb
-      });
-    }
-
-    if (!this.isInitialized || !this.dynamodb) {
-      logger.error('[DynamoDB] Service not initialized after initialization attempt:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb,
-        hasConfig: !!this.clientConfig,
-        env: {
-          nodeEnv: process.env.NODE_ENV,
-          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-          hasRegion: !!process.env.AWS_REGION,
-          hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-          hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY
-        }
-      });
-      throw new Error('DynamoDB service is not initialized. Check AWS credentials and configuration.');
-    }
-  }
-
-  async verifyTables(): Promise<void> {
-    await this.ensureInitialized();
-    logger.info('[DynamoDB] Verifying required tables exist...')
-    
-    // Log the actual table names being used
-    logger.info('[DynamoDB] Table names:', {
-      Messages: TableNames.Messages,
-      GroupChats: TableNames.GroupChats,
-      Users: TableNames.Users,
-      envMessages: process.env.DYNAMODB_MESSAGES_TABLE,
-      envGroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-      envUsers: process.env.DYNAMODB_USERS_TABLE
-    })
-    
-    try {
-      const tables = [
-        { name: TableNames.Messages, envVar: process.env.DYNAMODB_MESSAGES_TABLE },
-        { name: TableNames.GroupChats, envVar: process.env.DYNAMODB_GROUP_CHATS_TABLE },
-        { name: TableNames.Users, envVar: process.env.DYNAMODB_USERS_TABLE }
-      ]
-      
-      for (const table of tables) {
-        try {
-          logger.info(`[DynamoDB] Checking table ${table.name} (${table.envVar})...`)
-          await this.send(new DescribeTableCommand({
-            TableName: table.name
-          }))
-          logger.info(`[DynamoDB] Table ${table.name} exists and is accessible`)
-        } catch (error) {
-          if (error instanceof ResourceNotFoundException) {
-            logger.error(`[DynamoDB] Table ${table.name} does not exist`)
-            throw error
-          }
-          logger.error(`[DynamoDB] Error checking table ${table.name}:`, {
-            error,
-            message: error instanceof Error ? error.message : 'Unknown error'
-          })
-          throw error
-        }
+    this.initializationPromise = (async () => {
+      const initStart = Date.now();
+      try {
+        logger.info(`[DynamoDB] Starting initialization at ${new Date().toISOString()}`);
+        logger.info(`[DynamoDB] Using AWS region: ${this.config.region}`);
+        logger.info(`[DynamoDB] Railway region: ${process.env.RAILWAY_REGION}`);
+        
+        await this.testConnection();
+        
+        this.metrics.initDuration = Date.now() - initStart;
+        logger.info(`[DynamoDB] Initialization successful after ${this.metrics.initDuration}ms`);
+    } catch (error) {
+        const typedError = error as Error & {
+          code?: string;
+          statusCode?: number;
+          requestId?: string;
+        };
+        this.metrics.lastError = typedError.message;
+        logger.error(`[DynamoDB] Initialization failed after ${Date.now() - initStart}ms:`, {
+          error: typedError.message,
+          code: typedError.code,
+          statusCode: typedError.statusCode,
+          requestId: typedError.requestId
+        });
+        throw error;
       }
-      
-      logger.info('[DynamoDB] All required tables exist and are accessible')
-    } catch (error) {
-      logger.error('[DynamoDB] Error verifying tables:', {
-        error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      })
-      throw error
-    }
+    })();
+
+    return this.initializationPromise;
   }
 
-  // Add send method with proper typing
-  async send<T = any>(command: any): Promise<T> {
-    await this.ensureInitialized();
+  private async testConnection(): Promise<void> {
+    const attemptStart = Date.now();
+    this.metrics.totalAttempts++;
     
     try {
-      logger.info('[DynamoDB] Preparing to execute command:', {
-        commandName: command?.constructor?.name,
-        tableName: command?.input?.TableName,
-        config: {
-          region: this.clientConfig.region,
-          hasCredentials: !!this.clientConfig.credentials,
-          credentialsLength: {
-            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
-          }
-        },
-        commandInput: command?.input ? {
-          ...command.input,
-          // Mask any sensitive data
-          Item: command.input.Item ? 'Present' : undefined,
-          Key: command.input.Key ? 'Present' : undefined
-        } : 'No input'
-      });
+      logger.info(`[DynamoDB] Connection attempt #${this.metrics.totalAttempts}`);
+      logger.info(`[DynamoDB] Credentials length - Access Key: ${this.config.credentials.accessKeyId.length}, Secret: ${this.config.credentials.secretAccessKey.length}`);
       
-      const result = await this.dynamodb!.send(command);
-      logger.info('[DynamoDB] Command executed successfully:', {
-        commandName: command?.constructor?.name,
-        hasResult: !!result,
-        resultKeys: result ? Object.keys(result) : []
+      const connectionTimeoutPromise = new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error('Connection timeout')), CONNECTION_TIMEOUT_MS);
       });
-      return result as T;
+
+      await Promise.race([
+        this.client.send(new DescribeTableCommand({ TableName: this.config.tableName })),
+        connectionTimeoutPromise
+      ]);
+
+      this.metrics.lastAttemptDuration = Date.now() - attemptStart;
+      logger.info(`[DynamoDB] Connection test successful after ${this.metrics.lastAttemptDuration}ms`);
     } catch (error) {
-      logger.error('[DynamoDB] Command execution failed:', {
-        error,
-        name: error instanceof Error ? error.name : 'Unknown',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        command: {
-          name: command?.constructor?.name,
-          input: command?.input ? {
-            ...command.input,
-            // Mask any sensitive data
-            Item: command.input.Item ? 'Present' : undefined,
-            Key: command.input.Key ? 'Present' : undefined
-          } : 'No input'
-        },
-        config: {
-          region: this.clientConfig.region,
-          hasCredentials: !!this.clientConfig.credentials,
-          credentialsLength: {
-            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
-          }
-        }
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      this.metrics.lastAttemptDuration = Date.now() - attemptStart;
+      this.metrics.lastError = typedError.message;
+      logger.error(`[DynamoDB] Connection test failed after ${this.metrics.lastAttemptDuration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
       });
       throw error;
     }
   }
 
-  // Messages
-  async createMessage(message: Message): Promise<Message> {
-    console.log('[DynamoDB] Creating message:', message)
-
-    const item = {
-      id: message.id,
-      groupId: message.groupId,
-      content: message.content,
-      userId: message.userId,
-      displayName: message.displayName,
-      imageUrl: message.imageUrl,
-      timestamp: message.timestamp,
-      reactions: message.reactions || {},
-      attachments: message.attachments || [],
-      metadata: message.metadata || {},
-      replyCount: message.replyCount || 0,
-      ...(message.parentId && { parentId: message.parentId })
-    }
-
-    await this.dynamodb!.send(new PutCommand({
-      TableName: TableNames.Messages,
-      Item: item
-    }))
-
-    return {
-      ...message,
-      sender: {
-        id: message.userId,
-        displayName: message.displayName,
-        imageUrl: message.imageUrl
-      },
-      replies: []
-    }
-  }
-
-  async createReply(reply: Message): Promise<void> {
-    console.log('[DynamoDB] Creating reply:', {
-      id: reply.id,
-      parentId: reply.parentId,
-      userId: reply.userId,
-      content: reply.content.substring(0, 50)
-    })
+  public async getGroupsByUserId(userId: string): Promise<GroupItem[]> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting getGroupsByUserId for user ${userId}`);
     
     try {
-      // First create the reply message
-      await this.createMessage(reply)
+      const params = {
+        TableName: this.config.tableName,
+        FilterExpression: 'userId = :userId',
+        ExpressionAttributeValues: {
+          ':userId': { S: userId }
+        }
+      };
 
-      // Then increment the parent message's replyCount
-      if (reply.parentId) {
-        await this.dynamodb!.send(new UpdateCommand({
-          TableName: TableNames.Messages,
-          Key: {
-            id: reply.parentId,
-            groupId: reply.groupId
-          },
-          UpdateExpression: 'ADD replyCount :inc',
-          ExpressionAttributeValues: {
-            ':inc': 1
-          }
-        }))
-      }
+      logger.info(`[DynamoDB] Scanning table ${this.config.tableName} with params:`, params);
+      
+      const scanPromise = this.client.send(new ScanCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      const result = await Promise.race([scanPromise, operationTimeoutPromise]) as ScanCommandOutput;
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Scan completed in ${duration}ms. Found ${result.Items?.length ?? 0} items`);
+      
+      return (result.Items || []) as GroupItem[];
     } catch (error) {
-      console.error('[DynamoDB] Error creating reply:', {
-        error,
-        replyId: reply.id,
-        parentId: reply.parentId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Scan failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
     }
   }
 
-  async getMessagesByGroup(groupId: string, limit: number = 50): Promise<Message[]> {
-    console.log('[DynamoDB] Fetching messages for group:', {
-      groupId,
-      limit,
-      tableName: TableNames.Messages
-    })
+  public async getGroupById(groupId: string): Promise<GroupItem | null> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting getGroupById for group ${groupId}`);
     
     try {
-      // First, get all messages for the group
-      const result = await this.dynamodb!.send(new QueryCommand({
+      const params = {
+        TableName: this.config.tableName,
+        Key: {
+          groupId: { S: groupId }
+        }
+      };
+
+      logger.info(`[DynamoDB] Getting item from table ${this.config.tableName}`);
+      
+      const getItemPromise = this.client.send(new GetItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      const result = await Promise.race([getItemPromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] GetItem completed in ${duration}ms`);
+      
+      return result.Item as GroupItem || null;
+    } catch (error) {
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] GetItem failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
+    }
+  }
+
+  public async ensureUserInGroup(userId: string, groupId: string): Promise<boolean> {
+    const group = await this.getGroupById(groupId);
+    if (!group) {
+      logger.error(`[DynamoDB] Group ${groupId} not found`);
+      return false;
+    }
+
+    // Check if user is in group's members list
+    const members = group.members?.SS || [];
+    return members.includes(userId);
+  }
+
+  public async getMessagesForGroup(groupId: string, limit: number = 50): Promise<any[]> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting getMessagesForGroup for group ${groupId}`);
+    
+    try {
+      const params = {
         TableName: TableNames.Messages,
-        IndexName: 'GroupIdIndex',
         KeyConditionExpression: 'groupId = :groupId',
         ExpressionAttributeValues: {
-          ':groupId': groupId
+          ':groupId': { S: groupId }
         },
         Limit: limit,
         ScanIndexForward: false // Get most recent messages first
-      }))
+      };
 
-      console.log('[DynamoDB] Query result:', {
-        count: result.Count,
-        scannedCount: result.ScannedCount,
-        hasItems: !!result.Items,
-        itemCount: result.Items?.length
-      })
+      logger.info(`[DynamoDB] Querying table ${TableNames.Messages} for messages`);
       
-      if (!result.Items) {
-        console.log('[DynamoDB] No messages found for group:', groupId)
-        return []
-      }
-
-      // Separate parent messages and replies
-      const parentMessages: DynamoDBMessage[] = []
-      const repliesMap: Record<string, DynamoDBMessage[]> = {}
-
-      result.Items.forEach((item) => {
-        const message = item as DynamoDBMessage
-        if (message.parentId) {
-          // This is a reply
-          if (!repliesMap[message.parentId]) {
-            repliesMap[message.parentId] = []
-          }
-          repliesMap[message.parentId].push(message)
-        } else {
-          // This is a parent message
-          parentMessages.push(message)
-        }
-      })
-
-      // Convert parent messages and attach their replies
-      const messages = parentMessages.map(item => {
-        const message = convertToMessage(item)
-        if (repliesMap[message.id]) {
-          message.replies = repliesMap[message.id]
-            .map(reply => convertToMessage(reply))
-            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) // Sort replies chronologically
-        }
-        return message
-      })
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) // Sort parent messages chronologically
-
-      console.log('[DynamoDB] Successfully processed messages:', {
-        totalMessages: result.Items.length,
-        parentMessages: messages.length,
-        repliesFound: Object.keys(repliesMap).length,
-        messageDetails: messages.map(m => ({
-          id: m.id,
-          timestamp: m.timestamp,
-          replyCount: m.replies?.length ?? 0
-        }))
-      })
-
-      return messages
-    } catch (error) {
-      console.error('[DynamoDB] Error fetching messages:', error)
-      throw error
-    }
-  }
-
-  // Message Replies
-  async addReply(parentId: string, reply: Message): Promise<void> {
-    console.log('[DynamoDB] Adding reply:', {
-      parentId,
-      replyId: reply.id,
-      userId: reply.userId
-    })
-    
-    try {
-      await this.dynamodb!.send(new UpdateCommand({
-        TableName: TableNames.Messages,
-        Key: { id: parentId },
-        UpdateExpression: 'SET replies = list_append(if_not_exists(replies, :empty_list), :reply)',
-        ExpressionAttributeValues: {
-          ':reply': [reply],
-          ':empty_list': []
-        }
-      }))
-      
-      console.log('[DynamoDB] Successfully added reply')
-    } catch (error) {
-      console.error('[DynamoDB] Error adding reply:', error)
-      throw error
-    }
-  }
-
-  // Reactions
-  async addReaction(messageId: string, reaction: Reaction): Promise<void> {
-    console.log('[DynamoDB] Adding reaction:', {
-      messageId,
-      emoji: reaction.emoji,
-      userId: reaction.userId
-    })
-    
-    try {
-      await this.dynamodb!.send(new PutCommand({
-        TableName: TableNames.Reactions,
-        Item: {
-          messageId,
-          userId: reaction.userId,
-          emoji: reaction.emoji,
-          timestamp: reaction.timestamp
-        }
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error adding reaction:', {
-        error,
-        messageId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async removeReaction(messageId: string, userId: string): Promise<void> {
-    console.log('[DynamoDB] Removing reaction:', {
-      messageId,
-      userId
-    })
-    
-    try {
-      await this.dynamodb!.send(new DeleteCommand({
-        TableName: TableNames.Reactions,
-        Key: {
-          messageId,
-          userId
-        }
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error removing reaction:', {
-        error,
-        messageId,
-        userId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  // Typing Indicators
-  async setTypingIndicator(conversationId: string, userId: string, isTyping: boolean): Promise<void> {
-    console.log('[DynamoDB] Setting typing indicator:', {
-      conversationId,
-      userId,
-      isTyping
-    })
-    
-    try {
-      await this.dynamodb!.send(new PutCommand({
-        TableName: TableNames.TypingIndicators,
-        Item: {
-          conversationId,
-          userId,
-          isTyping,
-          updatedAt: Date.now()
-        }
-      }))
-      console.log('[DynamoDB] Successfully set typing indicator')
-    } catch (error) {
-      console.error('[DynamoDB] Error setting typing indicator:', error)
-      throw error
-    }
-  }
-
-  async getTypingUsers(conversationId: string): Promise<TypingIndicator[]> {
-    console.log('[DynamoDB] Getting typing users for conversation:', conversationId)
-    
-    try {
-      const result = await this.dynamodb!.send(new QueryCommand({
-        TableName: TableNames.TypingIndicators,
-        KeyConditionExpression: 'conversationId = :conversationId',
-        FilterExpression: 'isTyping = :isTyping',
-        ExpressionAttributeValues: {
-          ':conversationId': conversationId,
-          ':isTyping': true
-        }
-      }))
-      
-      console.log('[DynamoDB] Found typing users:', result.Items?.length || 0)
-      return result.Items as TypingIndicator[]
-    } catch (error) {
-      console.error('[DynamoDB] Error getting typing users:', error)
-      throw error
-    }
-  }
-
-  async deleteTypingIndicator(conversationId: string, userId: string): Promise<void> {
-    console.log('[DynamoDB] Deleting typing indicator:', {
-      conversationId,
-      userId
-    })
-    
-    try {
-      await this.dynamodb!.send(new DeleteCommand({
-        TableName: TableNames.TypingIndicators,
-        Key: {
-          conversationId,
-          userId
-        }
-      }))
-      console.log('[DynamoDB] Successfully deleted typing indicator')
-    } catch (error) {
-      console.error('[DynamoDB] Error deleting typing indicator:', error)
-      throw error
-    }
-  }
-
-  // Group Chats
-  async createGroupChat(groupChat: GroupChat): Promise<GroupChat> {
-    logger.info('[DynamoDB] Creating group chat:', {
-      id: groupChat.id,
-      name: groupChat.name,
-      members: groupChat.members,
-      tableName: TableNames.GroupChats
-    })
-
-    try {
-      await this.dynamodb!.send(new PutCommand({
-        TableName: TableNames.GroupChats,
-        Item: {
-          id: groupChat.id,
-          name: groupChat.name,
-          userId: groupChat.userId,
-          members: groupChat.members,
-          createdAt: groupChat.createdAt,
-          updatedAt: groupChat.updatedAt,
-          metadata: groupChat.metadata || {}
-        }
-      }))
-
-      logger.info('[DynamoDB] Group chat created successfully:', {
-        id: groupChat.id,
-        name: groupChat.name
-      })
-
-      return groupChat
-    } catch (error) {
-      logger.error('[DynamoDB] Error creating group chat:', {
-        error,
-        groupId: groupChat.id,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        tableName: TableNames.GroupChats
-      })
-      throw error
-    }
-  }
-
-  // Users
-  async getAllUsers(): Promise<User[]> {
-    console.log('[DynamoDB] Getting all users')
-    
-    try {
-      const result = await this.dynamodb!.send(new ScanCommand({
-        TableName: TableNames.Users,
-        Limit: 50 // Limiting to 50 users for performance
-      }))
-      
-      console.log('[DynamoDB] Users scan result:', {
-        count: result.Count,
-        scannedCount: result.ScannedCount
-      })
-      
-      return (result.Items || []) as User[]
-    } catch (error) {
-      console.error('[DynamoDB] Error getting all users:', error)
-      throw error
-    }
-  }
-
-  async getUserById(userId: string): Promise<User | null> {
-    console.log('[DynamoDB] Getting user by ID:', userId)
-    
-    try {
-      const result = await this.dynamodb!.send(new GetCommand({
-        TableName: TableNames.Users,
-        Key: { id: userId }
-      }))
-      
-      console.log('[DynamoDB] User query result:', {
-        hasItem: !!result.Item,
-        userId: result.Item?.id
-      })
-      
-      return result.Item as User || null
-    } catch (error) {
-      console.error('[DynamoDB] Error getting user:', error)
-      throw error
-    }
-  }
-
-  async getMessage(messageId: string): Promise<Message | null> {
-    console.log('[DynamoDB] Getting message:', messageId)
-    
-    try {
-      const result = await this.dynamodb!.send(new GetCommand({
-        TableName: TableNames.Messages,
-        Key: { id: messageId }
-      }))
-
-      if (!result.Item) return null
-      return convertToMessage(result.Item as DynamoDBMessage)
-    } catch (error) {
-      console.error('[DynamoDB] Error getting message:', {
-        error,
-        messageId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async getRepliesForMessage(
-    messageId: string,
-    limit?: number,
-    lastEvaluatedKey?: Record<string, any>
-  ): Promise<Message[]> {
-    console.log('[DynamoDB] Getting replies for message:', {
-      messageId,
-      limit,
-      hasLastKey: !!lastEvaluatedKey
-    })
-    
-    try {
-      const result = await this.dynamodb!.send(new QueryCommand({
-        TableName: TableNames.Messages,
-        IndexName: 'ParentMessageIndex',
-        KeyConditionExpression: 'parentId = :parentId',
-        ExpressionAttributeValues: {
-          ':parentId': messageId
-        },
-        Limit: limit,
-        ExclusiveStartKey: lastEvaluatedKey,
-        ScanIndexForward: true // true = ascending order by timestamp (oldest first)
-      }))
-
-      if (!result.Items) return []
-      
-      // Sort by timestamp to ensure chronological order
-      const replies = result.Items.map(item => convertToMessage(item as DynamoDBMessage))
-      return replies.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    } catch (error) {
-      console.error('[DynamoDB] Error getting replies:', {
-        error,
-        messageId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async getMessagesForGroup(groupId: string, limit: number = 50, lastEvaluatedKey?: any): Promise<{ messages: Message[], lastEvaluatedKey?: any }> {
-    console.log('[DynamoDB] Getting messages for group:', {
-      groupId,
-      limit,
-      lastEvaluatedKey
-    })
-
-    try {
-      const result = await this.dynamodb!.send(new QueryCommand({
-        TableName: TableNames.Messages,
-        IndexName: 'GroupIdIndex',
-        KeyConditionExpression: 'groupId = :groupId',
-        ExpressionAttributeValues: {
-          ':groupId': groupId
-        },
-        Limit: limit,
-        ScanIndexForward: false,
-        ExclusiveStartKey: lastEvaluatedKey
-      }))
-
-      return {
-        messages: (result.Items || []).map((item) => convertToMessage(item as DynamoDBMessage)),
-        lastEvaluatedKey: result.LastEvaluatedKey
-      }
-    } catch (error) {
-      console.error('[DynamoDB] Error getting messages for group:', {
-        error,
-        groupId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async updateMessage(messageId: string, updates: MessageUpdate): Promise<void> {
-    console.log('[DynamoDB] Updating message:', {
-      messageId,
-      updates: JSON.stringify(updates)
-    })
-    
-    try {
-      const updateExpressions: string[] = []
-      const expressionAttributeNames: Record<string, string> = {}
-      const expressionAttributeValues: Record<string, any> = {}
-
-      Object.entries(updates).forEach(([key, value]) => {
-        updateExpressions.push(`#${key} = :${key}`)
-        expressionAttributeNames[`#${key}`] = key
-        expressionAttributeValues[`:${key}`] = value
-      })
-
-      await this.dynamodb!.send(new UpdateCommand({
-        TableName: TableNames.Messages,
-        Key: { id: messageId },
-        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
-        ExpressionAttributeNames: expressionAttributeNames,
-        ExpressionAttributeValues: expressionAttributeValues
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error updating message:', {
-        error,
-        messageId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async deleteMessage(messageId: string): Promise<void> {
-    console.log('[DynamoDB] Deleting message:', messageId)
-    
-    try {
-      await this.dynamodb!.send(new DeleteCommand({
-        TableName: TableNames.Messages,
-        Key: { id: messageId }
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error deleting message:', {
-        error,
-        messageId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async updateReply(replyId: string, updates: Partial<Message>): Promise<void> {
-    console.log('[DynamoDB] Updating reply:', {
-      replyId,
-      updates: JSON.stringify(updates)
-    })
-    
-    try {
-      const updateExpressions: string[] = []
-      const expressionAttributeNames: Record<string, string> = {}
-      const expressionAttributeValues: Record<string, any> = {}
-
-      Object.entries(updates).forEach(([key, value]) => {
-        updateExpressions.push(`#${key} = :${key}`)
-        expressionAttributeNames[`#${key}`] = key
-        expressionAttributeValues[`:${key}`] = value
-      })
-
-      await this.dynamodb!.send(new UpdateCommand({
-        TableName: TableNames.Messages,
-        Key: { id: replyId },
-        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
-        ExpressionAttributeNames: expressionAttributeNames,
-        ExpressionAttributeValues: expressionAttributeValues
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error updating reply:', {
-        error,
-        replyId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async deleteReply(replyId: string): Promise<void> {
-    console.log('[DynamoDB] Deleting reply:', replyId)
-    
-    try {
-      await this.dynamodb!.send(new DeleteCommand({
-        TableName: TableNames.Messages,
-        Key: { id: replyId }
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error deleting reply:', {
-        error,
-        replyId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async getRepliesWithPagination(
-    parentId: string,
-    limit?: number,
-    lastEvaluatedKey?: Record<string, any>
-  ): Promise<{ replies: Message[]; lastEvaluatedKey?: Record<string, any> }> {
-    console.log('[DynamoDB] Getting paginated replies:', {
-      parentId,
-      limit,
-      hasLastKey: !!lastEvaluatedKey
-    })
-    
-    try {
-      const result = await this.dynamodb!.send(new QueryCommand({
-        TableName: TableNames.Messages,
-        IndexName: 'ParentMessageIndex',
-        KeyConditionExpression: 'parentId = :parentId',
-        ExpressionAttributeValues: {
-          ':parentId': parentId
-        },
-        Limit: limit,
-        ExclusiveStartKey: lastEvaluatedKey,
-        ScanIndexForward: true // true = ascending order by timestamp (oldest first)
-      }))
-
-      console.log('[DynamoDB] Got paginated replies:', {
-        count: result.Items?.length || 0,
-        parentId,
-        hasMore: !!result.LastEvaluatedKey
-      })
-
-      // Sort by timestamp to ensure chronological order
-      const replies = (result.Items || []).map(item => convertToMessage(item as DynamoDBMessage))
-      return {
-        replies: replies.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-        lastEvaluatedKey: result.LastEvaluatedKey
-      }
-    } catch (error) {
-      console.error('[DynamoDB] Error getting paginated replies:', {
-        error,
-        parentId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async updateThreadReadStatus(
-    messageId: string,
-    userId: string,
-    lastReadTimestamp: string
-  ): Promise<void> {
-    console.log('[DynamoDB] Updating thread read status:', {
-      messageId,
-      userId,
-      lastReadTimestamp
-    })
-    
-    try {
-      await this.dynamodb!.send(new PutCommand({
-        TableName: TableNames.ThreadReadStatus,
-        Item: {
-          messageId,
-          userId,
-          lastReadTimestamp
-        }
-      }))
-    } catch (error) {
-      console.error('[DynamoDB] Error updating thread read status:', {
-        error,
-        messageId,
-        userId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async getThreadReadStatus(messageId: string): Promise<ThreadReadStatus[]> {
-    console.log('[DynamoDB] Getting thread read status:', messageId)
-    
-    try {
-      const result = await this.dynamodb!.send(new QueryCommand({
-        TableName: TableNames.ThreadReadStatus,
-        KeyConditionExpression: 'messageId = :messageId',
-        ExpressionAttributeValues: {
-          ':messageId': messageId
-        }
-      }))
-
-      return (result.Items || []) as ThreadReadStatus[]
-    } catch (error) {
-      console.error('[DynamoDB] Error getting thread read status:', {
-        error,
-        messageId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  async retryFailedOperation<T>(
-    operation: () => Promise<T>,
-    maxRetries: number = 3,
-    delayMs: number = 1000
-  ): Promise<T> {
-    let lastError: Error | undefined
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await operation()
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('Unknown error')
-        console.error('[DynamoDB] Operation failed, retrying:', {
-          attempt,
-          maxRetries,
-          error: lastError
-        })
-        
-        if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, delayMs * attempt))
-        }
-      }
-    }
-    
-    throw lastError || new Error('Operation failed after retries')
-  }
-
-  // Error handling wrapper
-  public async handleDynamoDBOperation<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
-        console.error('[DynamoDB] Missing AWS credentials:', {
-          hasAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
-          hasSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-          hasRegion: !!process.env.AWS_REGION,
-          nodeEnv: process.env.NODE_ENV,
-          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME
-        })
-        throw new Error('Missing AWS credentials')
-      }
-
-      return await operation()
-    } catch (error) {
-      console.error('[DynamoDB] Operation failed:', {
-        error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        type: error instanceof Error ? error.constructor.name : typeof error,
-        env: {
-          nodeEnv: process.env.NODE_ENV,
-          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-          region: process.env.AWS_REGION
-        }
-      })
-      throw error
-    }
-  }
-
-  async getGroupsByUserId(userId: string): Promise<GroupChat[]> {
-    try {
-      logger.info('[DynamoDB] GetGroupsByUserId called:', {
-        userId,
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb,
-        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      });
-      
-      // Check if groups table is available
-      if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
-        logger.warn('[DynamoDB] Groups table not configured, returning empty array');
-        return [];
-      }
-
-      await this.ensureInitialized();
-      
-      logger.info('[DynamoDB] Fetching groups for user:', {
-        userId,
-        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb
+      const queryPromise = this.client.send(new QueryCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
       });
 
-      // Get all groups and filter by user membership
-      const result = await this.dynamodb!.send(new ScanCommand({
-        TableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        FilterExpression: 'contains(members, :userId)',
-        ExpressionAttributeValues: {
-          ':userId': userId
-        }
-      }));
-
-      const groups = (result.Items || []) as GroupChat[];
-      logger.info('[DynamoDB] Found groups for user:', {
-        userId,
-        count: groups.length,
-        groups: groups.map(g => ({ id: g.id, name: g.name, memberCount: g.members?.length })),
-        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      });
-
-      return groups;
+      const result = await Promise.race([queryPromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Query completed in ${duration}ms. Found ${result.Items?.length ?? 0} messages`);
+      
+      return result.Items || [];
     } catch (error) {
-      logger.error('[DynamoDB] Error getting groups for user:', {
-        error,
-        userId,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb,
-        clientConfig: this.clientConfig ? {
-          region: this.clientConfig.region,
-          hasCredentials: !!this.clientConfig.credentials
-        } : 'No config'
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Query failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
       });
       throw error;
     }
   }
 
-  async ensureUserInGroup(userIds: string | string[], groupId: string): Promise<void> {
-    const users = Array.isArray(userIds) ? userIds : [userIds]
-    console.log('[DynamoDB] Ensuring users are in group:', { users, groupId })
+  public async getAllUsers(): Promise<UserItem[]> {
+    const operationStart = Date.now();
+    logger.info('[DynamoDB] Starting getAllUsers');
     
     try {
-      // Get current group to check existing members
-      const group = await this.getGroupById(groupId)
-      if (!group) {
-        throw new Error('Group not found')
-      }
+      const params = {
+        TableName: TableNames.Users
+      };
 
-      // Get current members or empty array
-      const currentMembers = group.members || []
+      const scanPromise = this.client.send(new ScanCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
 
-      // Add any missing users
-      const newMembers = users.filter(userId => !currentMembers.includes(userId))
-      if (newMembers.length === 0) {
-        console.log('[DynamoDB] All users already in group')
-        return
-      }
-
-      // Update group with new members
-      await this.dynamodb!.send(new UpdateCommand({
-        TableName: TableNames.GroupChats,
-        Key: { id: groupId },
-        UpdateExpression: 'SET members = list_append(if_not_exists(members, :empty_list), :new_members)',
-        ExpressionAttributeValues: {
-          ':empty_list': [],
-          ':new_members': newMembers
-        }
-      }))
+      const result = await Promise.race([scanPromise, operationTimeoutPromise]) as ScanCommandOutput;
       
-      console.log('[DynamoDB] Successfully added users to group:', {
-        addedUsers: newMembers.length
-      })
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Scan completed in ${duration}ms. Found ${result.Items?.length ?? 0} users`);
+      
+      return (result.Items || []).map(item => ({
+        id: { S: item.id?.S || '' },
+        email: { S: item.email?.S || '' },
+        name: { S: item.name?.S || '' },
+        createdAt: { S: item.createdAt?.S || '' },
+        ...(item.status?.S && { status: { S: item.status.S as 'online' | 'away' | 'busy' | 'offline' } })
+      }));
     } catch (error) {
-      console.error('[DynamoDB] Error adding users to group:', {
-        error,
-        users,
-        groupId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Scan failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
     }
   }
 
-  async getGroupById(groupId: string): Promise<GroupChat | null> {
-    const result = await this.dynamodb!.send(new GetCommand({
-      TableName: TableNames.GroupChats,
-      Key: { id: groupId }
-    }))
-
-    if (!result.Item) return null
-
-    return {
-      id: result.Item.id,
-      name: result.Item.name,
-      userId: result.Item.userId,
-      members: result.Item.members,
-      createdAt: result.Item.createdAt,
-      updatedAt: result.Item.updatedAt,
-      metadata: result.Item.metadata || {}
-    }
-  }
-
-  async deleteGroup(groupId: string): Promise<void> {
-    console.log('[DynamoDB] Starting group deletion:', groupId)
+  public async getAllGroups(): Promise<GroupItem[]> {
+    const operationStart = Date.now();
+    logger.info('[DynamoDB] Starting getAllGroups');
     
     try {
-      // First verify the group exists
-      const group = await this.getGroupById(groupId)
-      if (!group) {
-        console.error('[DynamoDB] Cannot delete non-existent group:', groupId)
-        throw new Error('Group not found')
-      }
+      const params = {
+        TableName: this.config.tableName
+      };
 
-      console.log('[DynamoDB] Group found:', {
-        id: group.id,
-        name: group.name,
-        creatorId: group.userId,
-        members: group.members,
-        tableName: TableNames.GroupChats
-      })
-
-      // First, delete all messages in the group
-      console.log('[DynamoDB] Fetching messages for group:', groupId)
-      try {
-        const result = await this.getMessagesForGroup(groupId)
-        console.log('[DynamoDB] Found messages to delete:', result.messages.length)
-        
-        if (result.messages.length > 0) {
-          // Delete messages sequentially to avoid overwhelming DynamoDB
-          for (const message of result.messages) {
-            try {
-              console.log('[DynamoDB] Deleting message:', message.id)
-              await this.dynamodb!.send(new DeleteCommand({
-                TableName: TableNames.Messages,
-                Key: { 
-                  id: message.id,
-                  groupId: message.groupId
-                }
-              }))
-              console.log('[DynamoDB] Successfully deleted message:', message.id)
-            } catch (error) {
-              console.error('[DynamoDB] Error deleting message:', {
-                messageId: message.id,
-                groupId: message.groupId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-                errorType: error instanceof Error ? error.constructor.name : typeof error
-              })
-              // Continue with other messages even if one fails
-            }
-          }
-        }
-      } catch (error) {
-        console.error('[DynamoDB] Error in message deletion process:', {
-          error,
-          groupId,
-          errorMessage: error instanceof Error ? error.message : 'Unknown error',
-          errorType: error instanceof Error ? error.constructor.name : typeof error
-        })
-        // Continue with group deletion even if message deletion fails
-      }
-
-      // Then delete the group itself
-      console.log('[DynamoDB] Deleting group record:', {
-        groupId,
-        tableName: TableNames.GroupChats
-      })
-
-      const deleteCommand = new DeleteCommand({
-        TableName: TableNames.GroupChats,
-        Key: { id: groupId }
-      })
+      logger.info(`[DynamoDB] Scanning table ${this.config.tableName}`);
       
-      await this.dynamodb!.send(deleteCommand)
-      console.log('[DynamoDB] Group record deleted successfully:', groupId)
+      const scanPromise = this.client.send(new ScanCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      const result = await Promise.race([scanPromise, operationTimeoutPromise]) as ScanCommandOutput;
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Scan completed in ${duration}ms. Found ${result.Items?.length ?? 0} groups`);
+      
+      return (result.Items || []).map(item => ({
+        userId: item.userId as { S: string },
+        groupId: item.groupId as { S: string },
+        name: item.name as { S: string },
+        createdAt: item.createdAt as { S: string },
+        members: item.members as { SS: string[] }
+      }));
     } catch (error) {
-      console.error('[DynamoDB] Error in group deletion process:', {
-        error,
-        groupId,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        errorType: error instanceof Error ? error.constructor.name : typeof error,
-        tableName: TableNames.GroupChats
-      })
-      throw error
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Scan failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
     }
   }
 
-  async getMessagesWithReplies(groupId: string, limit: number = 50, lastEvaluatedKey?: any): Promise<{ messages: Message[], lastEvaluatedKey?: any }> {
-    const result = await this.getMessagesForGroup(groupId, limit, lastEvaluatedKey)
+  public async updateGroup(groupId: string, updates: { members: string[], updatedAt: string, name?: string }) {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting updateGroup for group ${groupId}`);
     
-    // Get replies for each message
-    const messagesWithReplies = await Promise.all(
-      result.messages.map(async (message) => {
-        if (message.replyCount > 0) {
-          const replies = await this.getRepliesForMessage(message.id)
-          return { ...message, replies }
+    try {
+      const updateExpressions: string[] = [];
+      const expressionAttributeValues: Record<string, AttributeValue> = {};
+      const expressionAttributeNames: Record<string, string> = {};
+
+      if (updates.name !== undefined) {
+        updateExpressions.push('#name = :name');
+        expressionAttributeValues[':name'] = { S: updates.name };
+        expressionAttributeNames['#name'] = 'name';
+      }
+
+      if (updates.members) {
+        updateExpressions.push('#members = :members');
+        expressionAttributeValues[':members'] = { SS: updates.members };
+        expressionAttributeNames['#members'] = 'members';
+      }
+
+      updateExpressions.push('#updatedAt = :updatedAt');
+      expressionAttributeValues[':updatedAt'] = { S: updates.updatedAt };
+      expressionAttributeNames['#updatedAt'] = 'updatedAt';
+
+      const params = {
+        TableName: TableNames.GroupChats,
+        Key: {
+          groupId: { S: groupId }
+        },
+        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+        ExpressionAttributeValues: expressionAttributeValues,
+        ExpressionAttributeNames: expressionAttributeNames,
+        ReturnValues: 'ALL_NEW' as const
+      };
+
+      const updatePromise = this.client.send(new UpdateItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      const result = await Promise.race([updatePromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Group updated in ${duration}ms`);
+      
+      return result.Attributes as GroupItem;
+    } catch (error) {
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Update group failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
+    }
+  }
+
+  public async deleteGroup(groupId: string): Promise<void> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting deleteGroup for group ${groupId}`);
+    
+    try {
+      const params = {
+        TableName: TableNames.GroupChats,
+        Key: {
+          groupId: { S: groupId }
         }
-        return { ...message, replies: [] }
-      })
-    )
+      };
+
+      const deletePromise = this.client.send(new DeleteItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      await Promise.race([deletePromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Group deleted in ${duration}ms`);
+    } catch (error) {
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Delete group failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
+    }
+  }
+
+  public async createUser(input: UserCreateInput): Promise<UserItem> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting createUser for user ${input.id}`);
+    
+    try {
+      const params = {
+        TableName: TableNames.Users,
+        Item: {
+          id: { S: input.id },
+          email: { S: input.email },
+          auth0Id: { S: input.auth0Id },
+          displayName: { S: input.displayName },
+          imageUrl: { S: input.imageUrl },
+          createdAt: { S: input.createdAt },
+          updatedAt: { S: input.updatedAt },
+          lastActiveAt: { N: input.lastActiveAt.toString() }
+        }
+      };
+
+      logger.info(`[DynamoDB] Putting item in table ${TableNames.Users}`);
+      
+      const putItemPromise = this.client.send(new PutItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      await Promise.race([putItemPromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] User created in ${duration}ms`);
 
     return {
-      messages: messagesWithReplies,
-      lastEvaluatedKey: result.lastEvaluatedKey
+        id: { S: input.id },
+        email: { S: input.email },
+        name: { S: input.displayName },
+        createdAt: { S: input.createdAt }
+      };
+    } catch (error) {
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Create user failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
     }
   }
 
-  async updateGroup(groupId: string, updates: Partial<GroupChat>): Promise<GroupChat> {
-    console.log('[DynamoDB] Updating group:', {
-      groupId,
-      updates: JSON.stringify(updates, null, 2)
-    })
+  public async createGroupChat(input: GroupChatCreateInput): Promise<GroupItem> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting createGroupChat for group ${input.id}`);
+    
+    try {
+      const params = {
+        TableName: this.config.tableName,
+        Item: {
+          groupId: { S: input.id },
+          name: { S: input.name },
+          userId: { S: input.userId },
+          createdAt: { S: input.createdAt },
+          updatedAt: { S: input.updatedAt },
+          members: { SS: input.members },
+          metadata: { M: Object.entries(input.metadata).reduce((acc, [key, value]) => {
+            acc[key] = { S: JSON.stringify(value) };
+            return acc;
+          }, {} as Record<string, AttributeValue>) }
+        }
+      };
+
+      logger.info(`[DynamoDB] Putting item in table ${this.config.tableName}`);
+      
+      const putItemPromise = this.client.send(new PutItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      await Promise.race([putItemPromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Group created in ${duration}ms`);
+      
+    return {
+        groupId: { S: input.id },
+        name: { S: input.name },
+        userId: { S: input.userId },
+        createdAt: { S: input.createdAt },
+        members: { SS: input.members }
+      };
+    } catch (error) {
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Create group failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
+    }
+  }
+
+  public async createMessage(input: MessageInput): Promise<MessageItem> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting createMessage for message ${input.id}`);
+    
+    try {
+      const params = {
+      TableName: TableNames.Messages,
+        Item: {
+          id: { S: input.id },
+          content: { S: input.content },
+          userId: { S: input.userId },
+          displayName: { S: input.displayName },
+          imageUrl: { S: input.imageUrl },
+          groupId: { S: input.groupId },
+          timestamp: { S: input.timestamp },
+          reactions: { M: Object.entries(input.reactions).reduce((acc, [key, value]) => {
+            acc[key] = { S: JSON.stringify(value) };
+            return acc;
+          }, {} as Record<string, AttributeValue>) },
+          attachments: { L: input.attachments.map(attachment => ({ S: JSON.stringify(attachment) })) },
+          metadata: { M: Object.entries(input.metadata).reduce((acc, [key, value]) => {
+            acc[key] = { S: JSON.stringify(value) };
+            return acc;
+          }, {} as Record<string, AttributeValue>) },
+          replyCount: { N: input.replyCount.toString() },
+          ...(input.parentId ? { parentId: { S: input.parentId } } : {}),
+          sender: { M: {
+            id: { S: input.sender.id },
+            displayName: { S: input.sender.displayName },
+            imageUrl: { S: input.sender.imageUrl }
+          }},
+          replies: { L: input.replies.map(reply => ({ S: JSON.stringify(reply) })) }
+        }
+      };
+
+      logger.info(`[DynamoDB] Putting message in table ${TableNames.Messages}`);
+      
+      const putItemPromise = this.client.send(new PutItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      await Promise.race([putItemPromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] Message created in ${duration}ms`);
+      
+      return params.Item as MessageItem;
+    } catch (error) {
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Create message failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
+    }
+  }
+
+  public async updateUser(userId: string, updates: UserUpdateInput): Promise<UserItem> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting updateUser for user ${userId}`);
     
     try {
       // Build update expression and attribute values
-      const updateExpressions: string[] = []
-      const expressionAttributeNames: Record<string, string> = {}
-      const expressionAttributeValues: Record<string, any> = {}
+      const updateExpressions: string[] = [];
+      const expressionAttributeValues: Record<string, AttributeValue> = {};
+      const expressionAttributeNames: Record<string, string> = {};
 
-      Object.entries(updates).forEach(([key, value]) => {
-        updateExpressions.push(`#${key} = :${key}`)
-        expressionAttributeNames[`#${key}`] = key
-        expressionAttributeValues[`:${key}`] = value
-      })
+      if (updates.displayName !== undefined) {
+        updateExpressions.push('#displayName = :displayName');
+        expressionAttributeValues[':displayName'] = { S: updates.displayName };
+        expressionAttributeNames['#displayName'] = 'displayName';
+      }
 
-      const updateExpression = `SET ${updateExpressions.join(', ')}`
+      if (updates.imageUrl !== undefined) {
+        updateExpressions.push('#imageUrl = :imageUrl');
+        expressionAttributeValues[':imageUrl'] = { S: updates.imageUrl };
+        expressionAttributeNames['#imageUrl'] = 'imageUrl';
+      }
 
-      console.log('[DynamoDB] Update parameters:', {
-        updateExpression,
-        expressionAttributeNames,
-        expressionAttributeValues
-      })
+      if (updates.lastActiveAt !== undefined) {
+        updateExpressions.push('#lastActiveAt = :lastActiveAt');
+        expressionAttributeValues[':lastActiveAt'] = { N: updates.lastActiveAt.toString() };
+        expressionAttributeNames['#lastActiveAt'] = 'lastActiveAt';
+      }
 
-      const result = await this.dynamodb!.send(new UpdateCommand({
-        TableName: TableNames.GroupChats,
-        Key: { id: groupId },
-        UpdateExpression: updateExpression,
-        ExpressionAttributeNames: expressionAttributeNames,
+      // Add updatedAt timestamp
+      updateExpressions.push('#updatedAt = :updatedAt');
+      expressionAttributeValues[':updatedAt'] = { S: new Date().toISOString() };
+      expressionAttributeNames['#updatedAt'] = 'updatedAt';
+
+      const params = {
+        TableName: TableNames.Users,
+        Key: {
+          id: { S: userId }
+        },
+        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
         ExpressionAttributeValues: expressionAttributeValues,
-        ReturnValues: 'ALL_NEW'
-      }))
+        ExpressionAttributeNames: expressionAttributeNames,
+        ReturnValues: 'ALL_NEW' as const
+      };
 
-      console.log('[DynamoDB] Group updated successfully:', {
-        groupId,
-        updatedAttributes: result.Attributes
-      })
+      logger.info(`[DynamoDB] Updating user in table ${TableNames.Users}`, {
+        userId,
+        updates: Object.keys(updates)
+      });
+      
+      const updatePromise = this.client.send(new UpdateItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
 
-      return result.Attributes as GroupChat
+      const result = await Promise.race([updatePromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] User updated in ${duration}ms`);
+      
+      // Cast the result to UserItem, ensuring required fields are present
+      const attributes = result.Attributes as Record<string, AttributeValue>;
+      if (!attributes?.id?.S || !attributes?.email?.S || !attributes?.name?.S || !attributes?.createdAt?.S) {
+        throw new Error('Missing required fields in user attributes');
+      }
+
+    return {
+        id: { S: attributes.id.S },
+        email: { S: attributes.email.S },
+        name: { S: attributes.name.S },
+        createdAt: { S: attributes.createdAt.S }
+      };
     } catch (error) {
-      console.error('[DynamoDB] Error updating group:', {
-        groupId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        type: error instanceof Error ? error.constructor.name : typeof error
-      })
-      throw error
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Update user failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
     }
   }
 
-  // Add search method
-  async searchMessages(params: {
-    query: string
-    groupId?: string
-    limit?: number
-    cursor?: string
-    startDate?: string
-    endDate?: string
-  }): Promise<{
-    items: DynamoDBMessage[]
-    count: number
-    lastEvaluatedKey?: any
-  }> {
-    console.log('[DynamoDB] Initializing search with params:', params)
+  public async getUserById(userId: string): Promise<UserItem | null> {
+    const operationStart = Date.now();
+    logger.info(`[DynamoDB] Starting getUserById for user ${userId}`);
     
-    const { query, groupId, limit = 20, cursor, startDate, endDate } = params
-
-    // Build filter expressions
-    const filterExpressions: string[] = []
-    const expressionValues: Record<string, any> = {
-      ':query1': query.toLowerCase(),
-      ':query2': query.toUpperCase(),
-      ':query3': query
-    }
-
-    // Add content search condition - check for lowercase, uppercase, and exact match
-    filterExpressions.push('(contains(content, :query1) OR contains(content, :query2) OR contains(content, :query3))')
-
-    // Add group filter if specified
-    if (groupId) {
-      filterExpressions.push('groupId = :groupId')
-      expressionValues[':groupId'] = groupId
-    }
-
-    // Add date range filters if specified
-    if (startDate) {
-      filterExpressions.push('timestamp >= :startDate')
-      expressionValues[':startDate'] = startDate
-    }
-    if (endDate) {
-      filterExpressions.push('timestamp <= :endDate')
-      expressionValues[':endDate'] = endDate
-    }
-
-    // Build the scan parameters
-    const scanParams = {
-      TableName: TableNames.Messages,
-      FilterExpression: filterExpressions.join(' AND '),
-      ExpressionAttributeValues: expressionValues,
-      Limit: limit,
-      ...(cursor && { ExclusiveStartKey: JSON.parse(decodeURIComponent(cursor)) })
-    }
-
-    console.log('[DynamoDB] Executing scan with params:', scanParams)
-
     try {
-      // Execute the scan
-      console.log('[DynamoDB] Sending scan command...')
-      const result = await this.send(new ScanCommand(scanParams))
-      console.log('[DynamoDB] Scan command completed')
+      const params = {
+        TableName: TableNames.Users,
+        Key: {
+          id: { S: userId }
+        }
+      };
+
+      logger.info(`[DynamoDB] Getting user from table ${TableNames.Users}`);
       
-      console.log('[DynamoDB] Search results:', {
-        count: result.Count,
-        scannedCount: result.ScannedCount,
-        hasMore: !!result.LastEvaluatedKey
-      })
+      const getItemPromise = this.client.send(new GetItemCommand(params));
+      const operationTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout')), OPERATION_TIMEOUT_MS);
+      });
+
+      const result = await Promise.race([getItemPromise, operationTimeoutPromise]);
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] GetItem completed in ${duration}ms`);
+      
+      if (!result.Item) {
+        return null;
+      }
+
+      const item = result.Item;
+      if (!item.id?.S || !item.email?.S || !item.name?.S || !item.createdAt?.S) {
+        logger.error('[DynamoDB] Missing required fields in user item:', item);
+        throw new Error('Missing required fields in user item');
+      }
 
       return {
-        items: (result.Items || []) as DynamoDBMessage[],
-        count: result.Count || 0,
-        lastEvaluatedKey: result.LastEvaluatedKey
-      }
+        id: { S: item.id.S },
+        email: { S: item.email.S },
+        name: { S: item.name.S },
+        createdAt: { S: item.createdAt.S }
+      };
     } catch (error) {
-      console.error('[DynamoDB] Error searching messages:', {
-        name: error instanceof Error ? error.name : 'Unknown',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        params: scanParams,
-        error
-      })
-      throw error
-    }
-  }
-
-  // Users
-  async createUser(user: User): Promise<User> {
-    console.log('[DynamoDB] Creating user:', {
-      userId: user.id,
-      email: user.email
-    })
-    
-    try {
-      await this.dynamodb!.send(new PutCommand({
-        TableName: TableNames.Users,
-        Item: {
-          id: user.id,
-          auth0Id: user.auth0Id,
-          email: user.email,
-          displayName: user.displayName,
-          imageUrl: user.imageUrl,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-          lastActiveAt: user.lastActiveAt
-        }
-      }))
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
       
-      console.log('[DynamoDB] Successfully created user:', user.id)
-      return user
-    } catch (error) {
-      console.error('[DynamoDB] Error creating user:', {
-        error,
-        userId: user.id,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] GetItem failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
+      });
+      throw error;
     }
   }
 
-  async updateUser(userId: string, updates: Partial<User>): Promise<User> {
-    console.log('[DynamoDB] Updating user:', {
-      userId,
-      updates: JSON.stringify(updates)
-    })
+  public async updateAllGroupsWithAllUsers(): Promise<void> {
+    const operationStart = Date.now();
+    logger.info('[DynamoDB] Starting updateAllGroupsWithAllUsers');
     
     try {
-      const updateExpressions: string[] = []
-      const expressionAttributeNames: Record<string, string> = {}
-      const expressionAttributeValues: Record<string, any> = {}
-
-      Object.entries(updates).forEach(([key, value]) => {
-        updateExpressions.push(`#${key} = :${key}`)
-        expressionAttributeNames[`#${key}`] = key
-        expressionAttributeValues[`:${key}`] = value
-      })
-
-      // Always update the updatedAt timestamp
-      updateExpressions.push('#updatedAt = :updatedAt')
-      expressionAttributeNames['#updatedAt'] = 'updatedAt'
-      expressionAttributeValues[':updatedAt'] = new Date().toISOString()
-
-      const result = await this.dynamodb!.send(new UpdateCommand({
-        TableName: TableNames.Users,
-        Key: { id: userId },
-        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
-        ExpressionAttributeNames: expressionAttributeNames,
-        ExpressionAttributeValues: expressionAttributeValues,
-        ReturnValues: 'ALL_NEW'
-      }))
-
-      console.log('[DynamoDB] User updated successfully:', {
-        userId,
-        updatedAttributes: result.Attributes
-      })
-
-      return result.Attributes as User
-    } catch (error) {
-      console.error('[DynamoDB] Error updating user:', {
-        userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      })
-      throw error
-    }
-  }
-
-  async deleteUser(userId: string): Promise<void> {
-    console.log('[DynamoDB] Deleting user:', userId)
-    
-    try {
-      await this.dynamodb!.send(new DeleteCommand({
-        TableName: TableNames.Users,
-        Key: { id: userId }
-      }))
-      
-      console.log('[DynamoDB] Successfully deleted user')
-    } catch (error) {
-      console.error('[DynamoDB] Error deleting user:', {
-        userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      })
-      throw error
-    }
-  }
-
-  private convertDynamoDBMessageToMessage(item: any): Message {
-    return {
-      id: item.id,
-      groupId: item.groupId,
-      content: item.content,
-      userId: item.userId,
-      displayName: item.displayName,
-      imageUrl: item.imageUrl || '',
-      timestamp: item.timestamp,
-      reactions: item.reactions || {},
-      attachments: item.attachments || [],
-      metadata: item.metadata || {},
-      replyCount: item.replyCount || 0,
-      ...(item.parentId && { parentId: item.parentId }),
-      sender: {
-        id: item.userId,
-        displayName: item.displayName,
-        imageUrl: item.imageUrl || ''
-      },
-      replies: []
-    }
-  }
-
-  async getUserByAuthId(auth0Id: string): Promise<User | null> {
-    console.log('[DynamoDB] Getting user by Auth0 ID:', auth0Id)
-    
-    try {
-      const result = await this.dynamodb!.send(new QueryCommand({
-        TableName: TableNames.Users,
-        IndexName: 'Auth0IdIndex',
-        KeyConditionExpression: 'auth0Id = :auth0Id',
-        ExpressionAttributeValues: {
-          ':auth0Id': auth0Id
-        }
-      }))
-
-      if (!result.Items || result.Items.length === 0) {
-        return null
-      }
-
-      return result.Items[0] as User
-    } catch (error) {
-      console.error('[DynamoDB] Error getting user by Auth0 ID:', {
-        auth0Id,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
-    }
-  }
-
-  // Group Chats
-  async getAllGroups(): Promise<GroupChat[]> {
-    console.log('[DynamoDB] Getting all groups')
-    
-    try {
-      const result = await this.dynamodb!.send(new ScanCommand({
-        TableName: TableNames.GroupChats
-      }))
-      
-      console.log('[DynamoDB] Groups scan result:', {
-        count: result.Count,
-        scannedCount: result.ScannedCount
-      })
-      
-      return (result.Items || []) as GroupChat[]
-    } catch (error) {
-      console.error('[DynamoDB] Error getting all groups:', error)
-      throw error
-    }
-  }
-
-  async updateAllGroupsWithAllUsers(): Promise<void> {
-    console.log('[DynamoDB] Starting update of all groups with all users')
-    
-    try {
-      // Get all users
-      const allUsers = await this.getAllUsers()
-      const userIds = allUsers.map(user => user.id)
-      
-      console.log('[DynamoDB] Found users:', {
-        count: userIds.length,
-        userIds
-      })
+      // Get all users first
+      const allUsers = await this.getAllUsers();
+      const userIds = allUsers.map(user => user.id.S);
 
       // Get all groups
-      const allGroups = await this.getAllGroups()
-      console.log('[DynamoDB] Found groups:', {
-        count: allGroups.length,
-        groups: allGroups.map(g => ({ id: g.id, name: g.name }))
-      })
-
-      // Update each group
+      const allGroups = await this.getAllGroups();
+      
+      // Update each group with all users as members
       for (const group of allGroups) {
-        console.log('[DynamoDB] Updating group:', {
-          id: group.id,
-          name: group.name,
-          currentMembers: group.members?.length || 0,
-          newMembers: userIds.length
-        })
-
-        await this.updateGroup(group.id, {
+        await this.updateGroup(group.groupId.S, {
           members: userIds,
-          updatedAt: new Date().toISOString()
-        })
+          updatedAt: new Date().toISOString(),
+          name: group.name.S // Preserve existing name
+        });
+        logger.info(`[DynamoDB] Updated group ${group.groupId.S} with all users`);
       }
-
-      console.log('[DynamoDB] Successfully updated all groups with all users')
+      
+      const duration = Date.now() - operationStart;
+      logger.info(`[DynamoDB] All groups updated with all users in ${duration}ms`);
     } catch (error) {
-      console.error('[DynamoDB] Error updating groups with users:', error)
-      throw error
-    }
-  }
-
-  private async testConnection(): Promise<boolean> {
-    try {
-      const startTime = Date.now();
-      logger.info('[DynamoDB] Starting connection test with config:', {
-        region: this.clientConfig?.region,
-        hasCredentials: !!this.clientConfig?.credentials,
-        tables: {
-          messages: TableNames.Messages,
-          groups: TableNames.GroupChats
-        },
-        networkInfo: {
-          railway: {
-            region: process.env.RAILWAY_REGION,
-            environment: process.env.RAILWAY_ENVIRONMENT_NAME,
-            projectId: process.env.RAILWAY_PROJECT_ID,
-            serviceId: process.env.RAILWAY_SERVICE_ID
-          }
-        }
+      const typedError = error as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+        time?: Date;
+        retryable?: boolean;
+      };
+      
+      const duration = Date.now() - operationStart;
+      logger.error(`[DynamoDB] Update all groups failed after ${duration}ms:`, {
+        error: typedError.message,
+        code: typedError.code,
+        statusCode: typedError.statusCode,
+        requestId: typedError.requestId,
+        time: typedError.time,
+        retryable: typedError.retryable,
+        metrics: this.metrics
       });
-
-      // Try to describe the Messages table as a connection test
-      const result = await this.dynamodb!.send(new DescribeTableCommand({
-        TableName: TableNames.Messages
-      }));
-
-      const endTime = Date.now();
-      const latency = endTime - startTime;
-
-      logger.info('[DynamoDB] Connection test successful:', {
-        latencyMs: latency,
-        tableInfo: {
-          tableName: result.Table?.TableName,
-          tableStatus: result.Table?.TableStatus,
-          itemCount: result.Table?.ItemCount,
-          tableSizeBytes: result.Table?.TableSizeBytes
-        }
-      });
-      return true;
-    } catch (error) {
-      logger.error('[DynamoDB] Connection test failed:', {
-        error,
-        errorName: error instanceof Error ? error.name : 'Unknown',
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        errorStack: error instanceof Error ? error.stack : undefined,
-        networkInfo: {
-          railway: {
-            region: process.env.RAILWAY_REGION,
-            environment: process.env.RAILWAY_ENVIRONMENT_NAME,
-            projectId: process.env.RAILWAY_PROJECT_ID,
-            serviceId: process.env.RAILWAY_SERVICE_ID
-          }
-        },
-        config: {
-          region: this.clientConfig?.region,
-          hasCredentials: !!this.clientConfig?.credentials,
-          credentialsLength: {
-            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
-          },
-          tables: {
-            messages: TableNames.Messages,
-            groups: TableNames.GroupChats
-          }
-        }
-      });
-      return false;
+      throw error;
     }
   }
 }

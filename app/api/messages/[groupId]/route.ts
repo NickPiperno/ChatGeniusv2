@@ -3,7 +3,22 @@ import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamoDb = new DynamoDBService()
+let dynamoDb: DynamoDBService;
+
+// Initialize DynamoDB service
+async function getDynamoDBInstance() {
+  if (!dynamoDb) {
+    logger.info('[Messages API] Creating new DynamoDB instance...')
+    dynamoDb = await DynamoDBService.getInstance()
+    logger.info('[Messages API] DynamoDB instance ready')
+  }
+  return dynamoDb
+}
+
+// Initialize the service
+getDynamoDBInstance().catch(error => {
+  logger.error('[Messages API] Failed to initialize DynamoDB:', error)
+})
 
 export async function GET(
   req: Request,
@@ -20,24 +35,17 @@ export async function GET(
       userId: session.user.sub 
     })
 
-    // Get messages from DynamoDB
-    const { messages, lastEvaluatedKey } = await dynamoDb.getMessagesForGroup(params.groupId)
-
-    logger.debug('[MESSAGES_GET] Messages fetched:', {
-      count: messages.length,
-      hasMore: !!lastEvaluatedKey
-    })
-
-    return NextResponse.json({ 
-      messages,
-      cursor: lastEvaluatedKey || null,
-      hasMore: !!lastEvaluatedKey
-    })
-
+    // Get messages for the group
+    const messages = await (await getDynamoDBInstance()).getMessagesForGroup(params.groupId)
+    
+    return NextResponse.json(messages)
   } catch (error) {
-    logger.error('[MESSAGES_GET] Error:', error)
+    logger.error('[MESSAGES_GET] Error:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      groupId: params.groupId
+    })
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Failed to fetch messages' },
       { status: 500 }
     )
   }
@@ -53,49 +61,27 @@ export async function POST(
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const { content } = await req.json()
-    if (!content) {
-      return NextResponse.json({ error: 'Content is required' }, { status: 400 })
+    const body = await req.json()
+    const { message } = body
+
+    if (!message) {
+      return NextResponse.json({ error: 'Message is required' }, { status: 400 })
     }
 
-    logger.info('[MESSAGES_POST] Creating message', { 
+    const result = await (await getDynamoDBInstance()).createMessage({
+      ...message,
       groupId: params.groupId,
-      userId: session.user.sub 
+      userId: session.user.sub
     })
 
-    // Create message in DynamoDB
-    const message = await dynamoDb.createMessage({
-      id: crypto.randomUUID(),
-      groupId: params.groupId,
-      content,
-      userId: session.user.sub,
-      displayName: session.user.name || session.user.email?.split('@')[0] || 'User',
-      imageUrl: session.user.picture || '',
-      timestamp: new Date().toISOString(),
-      reactions: {},
-      attachments: [],
-      metadata: {},
-      replyCount: 0,
-      sender: {
-        id: session.user.sub,
-        displayName: session.user.name || session.user.email?.split('@')[0] || 'User',
-        imageUrl: session.user.picture || ''
-      },
-      replies: []
-    })
-
-    logger.debug('[MESSAGES_POST] Message created:', {
-      messageId: message.id,
-      groupId: message.groupId,
-      userId: message.userId
-    })
-
-    return NextResponse.json(message)
-
+    return NextResponse.json(result)
   } catch (error) {
-    logger.error('[MESSAGES_POST] Error:', error)
+    logger.error('[MESSAGES_POST] Error:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      groupId: params.groupId
+    })
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Failed to create message' },
       { status: 500 }
     )
   }

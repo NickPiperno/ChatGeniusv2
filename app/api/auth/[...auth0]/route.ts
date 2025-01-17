@@ -4,18 +4,17 @@ import { DynamoDBService } from '@/lib/services/dynamodb'
 import { logger } from '@/lib/logger'
 import type { NextRequest } from 'next/server'
 
-// Initialize DynamoDB service with error handling
-let dynamoDb: DynamoDBService
-try {
-  dynamoDb = new DynamoDBService()
-} catch (error) {
-  logger.error('Failed to initialize DynamoDB service:', error)
-  // Don't throw here - let the handler deal with it
-}
+// Don't initialize here - we'll get the instance in the handler
+let dynamoDb: DynamoDBService | null = null;
 
 export const GET = handleAuth({
   callback: async (req: NextRequest, ctx: any) => {
     try {
+      // Get DynamoDB instance
+      if (!dynamoDb) {
+        dynamoDb = await DynamoDBService.getInstance();
+      }
+
       // Verify DynamoDB is initialized
       if (!dynamoDb) {
         logger.error('DynamoDB service not initialized')
@@ -76,7 +75,7 @@ export const GET = handleAuth({
         if (defaultGroup) {
           // Add user to default group with error handling
           try {
-            await dynamoDb.ensureUserInGroup(session.user.sub, defaultGroup.id)
+            await dynamoDb.ensureUserInGroup(session.user.sub, defaultGroup.groupId.S)
           } catch (error) {
             logger.error('Failed to add user to default group:', error)
             // Don't fail the whole auth flow if this fails
@@ -84,7 +83,7 @@ export const GET = handleAuth({
 
           logger.info('User setup complete:', {
             userId: session.user.sub,
-            defaultGroupId: defaultGroup.id
+            defaultGroupId: defaultGroup.groupId.S
           })
         } else {
           logger.error('Could not create or get default group')

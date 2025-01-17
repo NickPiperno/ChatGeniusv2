@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@auth0/nextjs-auth0'
-import { DynamoDBService, convertToMessage } from '@/lib/services/dynamodb'
+import { DynamoDBService, convertToMessage, MessageItem } from '@/lib/services/dynamodb'
 import { SearchParams, SearchResponse } from '@/types/search'
 import { DynamoDBMessage } from '@/types/models/dynamodb'
 
 console.log('[Search API] Initializing DynamoDB service...')
-const dynamoDb = new DynamoDBService()
-console.log('[Search API] DynamoDB service initialized')
+let dynamoDb: DynamoDBService;
+
+// Initialize DynamoDB service
+async function getDynamoDBInstance() {
+  if (!dynamoDb) {
+    console.log('[Search API] Creating new DynamoDB instance...')
+    dynamoDb = await DynamoDBService.getInstance()
+    console.log('[Search API] DynamoDB instance ready')
+  }
+  return dynamoDb
+}
+
+// Initialize the service
+getDynamoDBInstance().catch(error => {
+  console.error('[Search API] Failed to initialize DynamoDB:', error)
+})
 
 export async function GET(request: NextRequest) {
   console.log('[Search API] Received search request')
@@ -49,29 +63,27 @@ export async function GET(request: NextRequest) {
 
     // Execute the search
     console.log('[Search API] Executing search with DynamoDB service')
-    const result = await dynamoDb.searchMessages({
-      query,
-      groupId: groupId || undefined,
-      limit,
-      cursor: cursor || undefined,
-      startDate: startDate || undefined,
-      endDate: endDate || undefined
-    })
+    if (!groupId) {
+      return NextResponse.json(
+        { error: 'Group ID is required' },
+        { status: 400 }
+      )
+    }
+    const result = await (await getDynamoDBInstance()).getMessagesForGroup(groupId, limit)
 
     console.log('[Search API] Search results:', {
-      itemCount: result.items.length,
-      totalCount: result.count,
-      hasMore: !!result.lastEvaluatedKey
+      itemCount: result.length || 0,
+      hasMore: false // Since getMessagesForGroup doesn't support pagination yet
     })
 
     // Get unique group IDs from the results
-    const groupIds = Array.from(new Set(result.items.map(item => item.groupId)))
+    const groupIds = Array.from(new Set(result.map((item: MessageItem) => item.groupId.S)))
     
     // Fetch group details in parallel
     const groupDetails = await Promise.all(
-      groupIds.map(async (id) => {
-        const group = await dynamoDb.getGroupById(id)
-        return { id, name: group?.name || 'Unknown Group' }
+      groupIds.map(async (id: string) => {
+        const group = await (await getDynamoDBInstance()).getGroupById(id)
+        return { id, name: group?.name?.S || 'Unknown Group' }
       })
     )
     
@@ -81,7 +93,7 @@ export async function GET(request: NextRequest) {
     )
 
     // Format the results with group names
-    const searchResults = result.items.map(item => {
+    const searchResults = result.map((item: MessageItem) => {
       const message = convertToMessage(item)
       return {
         message,
@@ -97,16 +109,12 @@ export async function GET(request: NextRequest) {
 
     const response: SearchResponse = {
       results: searchResults,
-      totalResults: result.count,
-      ...(result.lastEvaluatedKey && {
-        nextCursor: encodeURIComponent(JSON.stringify(result.lastEvaluatedKey))
-      })
+      totalResults: result.length
     }
 
     console.log('[Search API] Sending response:', {
       resultCount: response.results.length,
-      totalResults: response.totalResults,
-      hasNextCursor: !!response.nextCursor
+      totalResults: response.totalResults
     })
 
     return NextResponse.json(response)

@@ -17,7 +17,7 @@ export function useSearch() {
     setError(null)
 
     try {
-      const response = await fetchApi(`/api/search?q=${encodeURIComponent(query)}`)
+      const response = await fetchApi(`/api/search/messages?query=${encodeURIComponent(query)}`)
       if (!response.ok) {
         throw new Error(`Search failed: ${response.statusText}`)
       }

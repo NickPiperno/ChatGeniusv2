@@ -3,7 +3,7 @@ import { createServer } from 'http'
 import next from 'next'
 import { parse } from 'url'
 import { logger } from '../lib/logger'
-import { DynamoDBService } from '../lib/services/dynamodb'
+import { DynamoDBService, convertToMessage } from '../lib/services/dynamodb'
 import { Message, MessageUpdate } from '../types/models/message'
 import crypto from 'crypto'
 import { 
@@ -16,6 +16,9 @@ import {
   MessageUpdateEvent,
   MessageDeleteEvent
 } from '../types/events/socket'
+import { MessageItem } from '../lib/services/dynamodb'
+import { AttributeValue } from '@aws-sdk/client-dynamodb'
+import { MessageAttachment } from '../types/models/message'
 
 // Initialize Next.js
 const dev = process.env.NODE_ENV !== 'production'
@@ -43,12 +46,8 @@ let dynamoDb: DynamoDBService;
 async function getDynamoDBInstance() {
   if (!dynamoDb) {
     logger.info('[Server] Creating DynamoDB instance...');
-    dynamoDb = new DynamoDBService();
-    // Wait for initialization to complete
-    await (dynamoDb as any).initializationPromise;
-    logger.info('[Server] DynamoDB instance ready:', {
-      isInitialized: dynamoDb.isInitialized
-    });
+    dynamoDb = await DynamoDBService.getInstance();
+    logger.info('[Server] DynamoDB instance ready');
   }
   return dynamoDb;
 }
@@ -151,7 +150,7 @@ export async function createCombinedServer() {
         })
 
         const messageEvent: MessageEvent = {
-          message,
+          message: convertToMessage(message),
           groupId: data.groupId
         }
 

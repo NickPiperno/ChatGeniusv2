@@ -3,7 +3,22 @@ import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamoDb = new DynamoDBService()
+let dynamoDb: DynamoDBService;
+
+// Initialize DynamoDB service
+async function getDynamoDBInstance() {
+  if (!dynamoDb) {
+    logger.info('[Groups API] Creating new DynamoDB instance...')
+    dynamoDb = await DynamoDBService.getInstance()
+    logger.info('[Groups API] DynamoDB instance ready')
+  }
+  return dynamoDb
+}
+
+// Initialize the service
+getDynamoDBInstance().catch(error => {
+  logger.error('[Groups API] Failed to initialize DynamoDB:', error)
+})
 
 export const runtime = 'nodejs'
 
@@ -19,32 +34,23 @@ export async function GET(
     }
     const userId = session.user.sub
 
-    const group = await dynamoDb.getGroupById(params.groupId)
+    // Get the group
+    const group = await (await getDynamoDBInstance()).getGroupById(params.groupId)
     if (!group) {
       logger.warn('Group not found:', { groupId: params.groupId })
       return NextResponse.json({ error: 'Group not found' }, { status: 404 })
     }
 
-    // All users should have access to all groups
-    logger.info('Group fetched successfully:', {
-      id: group.id,
-      name: group.name,
-      userId: group.userId,
-      members: group.members
-    })
-
     return NextResponse.json(group)
   } catch (error) {
-    logger.error('[GROUP_GET] Error:', error)
-    
-    if (process.env.NODE_ENV === 'development') {
-      return NextResponse.json({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      }, { status: 500 })
-    }
-    
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    logger.error('Error in GET /api/groups/[groupId]:', {
+      groupId: params.groupId,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    })
+    return NextResponse.json(
+      { error: 'Failed to fetch group' },
+      { status: 500 }
+    )
   }
 }
 
@@ -53,70 +59,53 @@ export async function PATCH(
   { params }: { params: { groupId: string } }
 ) {
   try {
-    logger.info('Update group request:', { groupId: params.groupId })
-    
     const session = await getSession()
     if (!session?.user?.sub) {
-      logger.warn('Unauthorized update attempt - no user ID')
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      logger.warn('Unauthorized group update attempt - no user ID')
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
     const userId = session.user.sub
 
-    const data = await req.json()
-    const { name } = data
-
-    if (!name?.trim()) {
-      logger.warn('Invalid group name:', { name })
-      return NextResponse.json({ error: 'Group name is required' }, { status: 400 })
-    }
-
-    logger.debug('Checking group existence and authorization', {
-      groupId: params.groupId,
-      userId
-    })
-
-    const group = await dynamoDb.getGroupById(params.groupId)
+    // Get the group first to check permissions
+    const group = await (await getDynamoDBInstance()).getGroupById(params.groupId)
     if (!group) {
-      logger.warn('Group not found:', { groupId: params.groupId })
+      logger.warn('Group not found for update:', { groupId: params.groupId })
       return NextResponse.json({ error: 'Group not found' }, { status: 404 })
     }
 
-    logger.debug('Authorization check:', {
-      userId,
-      groupCreatorId: group.userId,
-      isCreator: group.userId === userId
-    })
-
+    // Only the creator can update the group
     if (group.userId !== userId) {
-      logger.warn('Unauthorized update attempt by non-creator:', {
+      logger.warn('Unauthorized group update attempt - not creator:', {
+        groupId: params.groupId,
         userId,
         creatorId: group.userId
       })
       return NextResponse.json({ 
-        error: 'Unauthorized - only creator can update group' 
+        error: 'Unauthorized - Only the group creator can update this group'
       }, { status: 403 })
     }
 
-    logger.info('Updating group:', {
-      groupId: params.groupId,
-      newName: name.trim()
-    })
+    const { name } = await req.json()
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      logger.warn('Invalid group update data:', { name })
+      return NextResponse.json({ error: 'Invalid group name' }, { status: 400 })
+    }
 
     // Get all users to ensure everyone is a member
     logger.info('Fetching all users for group update')
-    const allUsers = await dynamoDb.getAllUsers()
-    const userIds = allUsers.map(user => user.id)
+    const allUsers = await (await getDynamoDBInstance()).getAllUsers()
+    const userIds = allUsers.map(user => user.id.S)
 
-    const updatedGroup = await dynamoDb.updateGroup(params.groupId, {
+    const updatedGroup = await (await getDynamoDBInstance()).updateGroup(params.groupId, {
       name: name.trim(),
-      members: userIds, // Ensure all users are members
+      members: userIds,
       updatedAt: new Date().toISOString()
     })
 
     logger.info('Group updated successfully:', {
       groupId: params.groupId,
       name: updatedGroup.name,
-      memberCount: updatedGroup.members?.length || 0
+      memberCount: updatedGroup.members?.SS?.length || 0
     })
 
     return NextResponse.json(updatedGroup)
@@ -125,15 +114,10 @@ export async function PATCH(
       groupId: params.groupId,
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-    
-    if (process.env.NODE_ENV === 'development') {
-      return NextResponse.json({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      }, { status: 500 })
-    }
-    
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Failed to update group' },
+      { status: 500 }
+    )
   }
 }
 
@@ -142,35 +126,24 @@ export async function DELETE(
   { params }: { params: { groupId: string } }
 ) {
   try {
-    logger.info('Delete group request:', { groupId: params.groupId })
-    
     const session = await getSession()
     if (!session?.user?.sub) {
-      logger.warn('Unauthorized delete attempt - no user ID')
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      logger.warn('Unauthorized group deletion attempt - no user ID')
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
     const userId = session.user.sub
 
-    logger.debug('Checking group existence and authorization', {
-      groupId: params.groupId,
-      userId
-    })
-
-    const group = await dynamoDb.getGroupById(params.groupId)
+    // Get the group first to check permissions
+    const group = await (await getDynamoDBInstance()).getGroupById(params.groupId)
     if (!group) {
-      logger.warn('Group not found:', { groupId: params.groupId })
+      logger.warn('Group not found for deletion:', { groupId: params.groupId })
       return NextResponse.json({ error: 'Group not found' }, { status: 404 })
     }
 
-    logger.info('[Group API] Group found:', {
-      groupId: params.groupId,
-      userId: group.userId,
-      isCreator: group.userId === userId
-    })
-
-    // Only allow the creator to delete the group
+    // Only the creator can delete the group
     if (group.userId !== userId) {
-      logger.warn('Unauthorized delete attempt by non-creator:', {
+      logger.warn('Unauthorized group deletion attempt - not creator:', {
+        groupId: params.groupId,
         userId,
         creatorId: group.userId
       })
@@ -180,7 +153,7 @@ export async function DELETE(
     }
 
     // Delete the group
-    await dynamoDb.deleteGroup(params.groupId)
+    await (await getDynamoDBInstance()).deleteGroup(params.groupId)
 
     logger.info('[Group API] Group deleted:', {
       groupId: params.groupId,
@@ -194,14 +167,9 @@ export async function DELETE(
       groupId: params.groupId,
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-    
-    if (process.env.NODE_ENV === 'development') {
-      return NextResponse.json({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      }, { status: 500 })
-    }
-    
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Failed to delete group' },
+      { status: 500 }
+    )
   }
 } 

@@ -4,7 +4,14 @@ export default withMiddlewareAuthRequired();
 
 export const config = {
   matcher: [
-    '/app/:path*',
-    '/api/groups/:path*'
+    /*
+     * Match all request paths except for the ones starting with:
+     * - api/auth (Auth0 authentication routes)
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public folder
+     */
+    '/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\..*|api/socketio).*)'
   ]
 };
