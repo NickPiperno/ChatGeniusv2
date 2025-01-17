@@ -2,60 +2,92 @@ import { getSession } from '@auth0/nextjs-auth0'
 import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
+import crypto from 'crypto'
+import { GroupChat } from '@/types/models/dynamodb'
+import { User } from '@/types/models/user'
 
-// Initialize DynamoDB service for each request instead of at module level
-async function getDynamoDBService() {
-  try {
-    const service = new DynamoDBService()
-    if (!service.isInitialized) {
-      logger.error('[DynamoDB] Service failed to initialize')
-      return null
-    }
-    return service
-  } catch (error) {
-    logger.error('[DynamoDB] Error creating service:', error)
-    return null
-  }
-}
+// Initialize DynamoDB service
+const dynamoDb = new DynamoDBService()
 
 export const runtime = 'nodejs'
 
 export async function GET() {
   try {
-    const dynamoDb = await getDynamoDBService()
-    if (!dynamoDb) {
+    logger.info('[GROUPS_GET] Starting groups fetch request');
+    
+    // Check DynamoDB initialization
+    if (!dynamoDb.isInitialized) {
+      logger.error('[GROUPS_GET] DynamoDB service not initialized:', {
+        hasRegion: !!process.env.AWS_REGION,
+        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        region: process.env.AWS_REGION,
+        groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
+      })
       return NextResponse.json({ 
         error: 'Database service unavailable',
-        details: 'Please check AWS credentials and configuration'
+        details: 'Please check AWS credentials and configuration',
+        env: {
+          hasRegion: !!process.env.AWS_REGION,
+          hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+          hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+          hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+        }
       }, { status: 503 })
     }
 
     const session = await getSession()
     if (!session?.user?.sub) {
-      logger.warn('Unauthorized groups fetch attempt - no user ID')
+      logger.warn('[GROUPS_GET] Unauthorized groups fetch attempt - no user ID')
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
     const userId = session.user.sub
 
-    logger.info('Fetching groups for user', { userId })
+    logger.info('[GROUPS_GET] Fetching groups for user', { 
+      userId,
+      groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
+    })
     
     // Handle case where groups table is not configured
     if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
-      logger.warn('Groups table not configured')
+      logger.warn('[GROUPS_GET] Groups table not configured')
       return NextResponse.json({
         count: 0,
-        groups: []
+        groups: [],
+        warning: 'Groups table not configured'
       })
+    }
+
+    // Verify tables before proceeding
+    try {
+      logger.info('[GROUPS_GET] Verifying DynamoDB tables...')
+      await dynamoDb.verifyTables()
+      logger.info('[GROUPS_GET] Tables verified successfully')
+    } catch (error) {
+      logger.error('[GROUPS_GET] Table verification failed:', {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      })
+      return NextResponse.json({ 
+        error: 'Database tables not accessible',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }, { status: 503 })
     }
 
     const groups = await dynamoDb.getGroupsByUserId(userId)
     
-    logger.debug('Groups fetched:', groups.map(g => ({
-      id: g.id,
-      name: g.name,
-      userId: g.userId,
-      members: g.members
-    })))
+    logger.info('[GROUPS_GET] Groups fetched successfully:', {
+      count: groups.length,
+      groups: groups.map(g => ({
+        id: g.id,
+        name: g.name,
+        members: g.members?.length
+      }))
+    })
 
     return NextResponse.json({
       count: groups.length,
@@ -66,7 +98,11 @@ export async function GET() {
       error,
       message: error instanceof Error ? error.message : 'Unknown error',
       stack: error instanceof Error ? error.stack : undefined,
+      type: error instanceof Error ? error.constructor.name : typeof error,
       env: {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        region: process.env.AWS_REGION,
         hasAuth0Secret: !!process.env.AUTH0_SECRET,
         hasAuth0BaseUrl: !!process.env.AUTH0_BASE_URL,
         hasAuth0IssuerBaseUrl: !!process.env.AUTH0_ISSUER_BASE_URL,
@@ -75,15 +111,21 @@ export async function GET() {
         hasAwsAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
         hasAwsSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
         hasAwsRegion: !!process.env.AWS_REGION,
-        nodeEnv: process.env.NODE_ENV,
-        apiUrl: process.env.NEXT_PUBLIC_API_URL
+        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
       }
     })
     
     return NextResponse.json({
       error: 'Database operation failed',
       details: error instanceof Error ? error.message : 'Unknown error',
-      type: error instanceof Error ? error.constructor.name : typeof error
+      type: error instanceof Error ? error.constructor.name : typeof error,
+      env: {
+        hasRegion: !!process.env.AWS_REGION,
+        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+      }
     }, { status: 500 })
   }
 }
@@ -92,9 +134,14 @@ export async function POST(request: Request) {
   try {
     logger.info('[GROUPS_POST] Starting group creation')
     
-    const dynamoDb = await getDynamoDBService()
-    if (!dynamoDb) {
-      logger.error('[GROUPS_POST] DynamoDB service not initialized')
+    // Check DynamoDB initialization
+    if (!dynamoDb.isInitialized) {
+      logger.error('[GROUPS_POST] DynamoDB service not initialized:', {
+        hasRegion: !!process.env.AWS_REGION,
+        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+      })
       return NextResponse.json({ 
         error: 'Database service unavailable',
         details: 'Please check AWS credentials and configuration'
@@ -109,7 +156,8 @@ export async function POST(request: Request) {
     } catch (error) {
       logger.error('[GROUPS_POST] Table verification failed:', {
         error,
-        message: error instanceof Error ? error.message : 'Unknown error'
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
       })
       return NextResponse.json({ 
         error: 'Database tables not accessible',
@@ -192,8 +240,14 @@ export async function POST(request: Request) {
 
 export async function PATCH() {
   try {
-    const dynamoDb = await getDynamoDBService()
-    if (!dynamoDb) {
+    // Check DynamoDB initialization
+    if (!dynamoDb.isInitialized) {
+      logger.error('[GROUPS_PATCH] DynamoDB service not initialized:', {
+        hasRegion: !!process.env.AWS_REGION,
+        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+      })
       return NextResponse.json({ 
         error: 'Database service unavailable',
         details: 'Please check AWS credentials and configuration'
@@ -217,7 +271,7 @@ export async function PATCH() {
     // Get all users
     logger.info('Fetching all users')
     const allUsers = await dynamoDb.getAllUsers()
-    const userIds = allUsers.map(user => user.id)
+    const userIds = allUsers.map((user: User) => user.id)
 
     // Get all groups
     logger.info('Fetching all groups')
@@ -230,7 +284,7 @@ export async function PATCH() {
     })
 
     const updates = await Promise.all(
-      allGroups.map(async group => {
+      allGroups.map(async (group: GroupChat) => {
         const updatedGroup = await dynamoDb.updateGroup(group.id, {
           members: userIds,
           updatedAt: new Date().toISOString()

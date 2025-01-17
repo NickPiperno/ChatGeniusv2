@@ -36,10 +36,12 @@ console.log('[DynamoDB] Environment check:', {
 
 // Validate required credentials
 if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
-  console.error('[DynamoDB] Missing required AWS credentials:', {
+  logger.error('[DynamoDB] Missing required AWS credentials:', {
     hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
     hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-    hasRegion: !!process.env.AWS_REGION
+    hasRegion: !!process.env.AWS_REGION,
+    nodeEnv: process.env.NODE_ENV,
+    isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME
   })
   throw new Error('Missing required AWS credentials or region')
 }
@@ -82,57 +84,94 @@ export function convertToMessage(item: DynamoDBMessage): Message {
   }
 }
 
+// Singleton instance
+let instance: DynamoDBService | null = null;
+
 export class DynamoDBService {
   private dynamodb: DynamoDBDocumentClient | null = null
   public isInitialized = false
 
   constructor() {
+    if (instance) {
+      return instance;
+    }
+    instance = this;
+
     try {
+      logger.info('[DynamoDB] Initializing DynamoDB service...', {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        region: process.env.AWS_REGION,
+        endpoint: process.env.AWS_ENDPOINT,
+        tables: {
+          messages: process.env.DYNAMODB_MESSAGES_TABLE,
+          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          users: process.env.DYNAMODB_USERS_TABLE
+        }
+      });
+
       // Check required environment variables
       const requiredEnvVars = {
         region: process.env.AWS_REGION,
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        messagesTable: process.env.DYNAMODB_MESSAGES_TABLE,
-        usersTable: process.env.DYNAMODB_USERS_TABLE
-      }
-
-      // Optional tables
-      const optionalEnvVars = {
-        groupChatsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        threadReadStatusTable: process.env.DYNAMODB_THREAD_READ_STATUS_TABLE,
-        typingIndicatorsTable: process.env.DYNAMODB_TYPING_INDICATORS_TABLE
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID?.substring(0, 5) + '...',
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ? '***' : undefined
       }
 
       // Log environment variable status
       Object.entries(requiredEnvVars).forEach(([key, value]) => {
-        logger.info(`[DynamoDB] ${key} is ${value ? 'set' : 'not set'}`)
-      })
-
-      Object.entries(optionalEnvVars).forEach(([key, value]) => {
-        logger.info(`[DynamoDB] (Optional) ${key} is ${value ? 'set' : 'not set'}`)
+        logger.info(`[DynamoDB] ${key}: ${value ? 'set' : 'not set'}`)
       })
 
       // Initialize DynamoDB client if all required variables are present
       if (Object.values(requiredEnvVars).every(Boolean)) {
-        const client = new DynamoDBClient({
+        logger.info('[DynamoDB] Creating DynamoDB client...');
+        
+        const clientConfig = {
           region: process.env.AWS_REGION,
           credentials: {
             accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
             secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
           }
-        })
+        };
+        
+        logger.info('[DynamoDB] Client configuration:', {
+          ...clientConfig,
+          credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID?.substring(0, 5) + '...',
+            secretAccessKey: '***'
+          }
+        });
 
-        this.dynamodb = DynamoDBDocumentClient.from(client)
-        this.isInitialized = true
-        logger.info('[DynamoDB] Service initialized successfully')
+        const client = new DynamoDBClient(clientConfig);
+        this.dynamodb = DynamoDBDocumentClient.from(client);
+        this.isInitialized = true;
+        
+        logger.info('[DynamoDB] Service initialized successfully');
+        
+        // Immediately verify tables to ensure connection works
+        this.verifyTables().catch(error => {
+          logger.error('[DynamoDB] Table verification failed:', {
+            error,
+            message: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined
+          });
+        });
       } else {
-        logger.error('[DynamoDB] Missing required environment variables')
-        this.isInitialized = false
+        logger.error('[DynamoDB] Missing required AWS credentials');
+        this.isInitialized = false;
       }
     } catch (error) {
-      logger.error('[DynamoDB] Error initializing service:', error)
-      this.isInitialized = false
+      logger.error('[DynamoDB] Error initializing service:', {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        env: {
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+          region: process.env.AWS_REGION
+        }
+      });
+      this.isInitialized = false;
     }
   }
 
@@ -958,9 +997,9 @@ export class DynamoDBService {
 
   async getGroupsByUserId(userId: string): Promise<GroupChat[]> {
     try {
-      logger.info('[DynamoDB] Getting all groups for user:', {
+      logger.info('[DynamoDB] Getting groups for user:', {
         userId,
-        tableName: TableNames.GroupChats
+        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
       })
       
       // Check if groups table is available
@@ -971,26 +1010,31 @@ export class DynamoDBService {
 
       this.ensureInitialized()
       
-      // Get all groups since all users should have access to all groups
+      // Get all groups and filter by user membership
       const result = await this.dynamodb!.send(new ScanCommand({
-        TableName: TableNames.GroupChats
+        TableName: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        FilterExpression: 'contains(members, :userId)',
+        ExpressionAttributeValues: {
+          ':userId': userId
+        }
       }))
 
       const groups = (result.Items || []) as GroupChat[]
-      logger.info('[DynamoDB] Found groups:', {
+      logger.info('[DynamoDB] Found groups for user:', {
+        userId,
         count: groups.length,
-        groups: groups.map(g => ({ id: g.id, name: g.name })),
-        tableName: TableNames.GroupChats
+        groups: groups.map(g => ({ id: g.id, name: g.name, memberCount: g.members?.length })),
+        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
       })
 
       return groups
     } catch (error) {
-      logger.error('[DynamoDB] Error getting groups:', {
+      logger.error('[DynamoDB] Error getting groups for user:', {
         error,
         userId,
         message: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
-        tableName: TableNames.GroupChats
+        tableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
       })
       throw error
     }
