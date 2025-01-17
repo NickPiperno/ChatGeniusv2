@@ -24,6 +24,11 @@ const envSchema = z.object({
   AWS_ACCESS_KEY_ID: z.string(),
   AWS_SECRET_ACCESS_KEY: z.string(),
 
+  // DynamoDB Tables
+  DYNAMODB_MESSAGES_TABLE: z.string().default('dev_Messages'),
+  DYNAMODB_GROUPS_TABLE: z.string().default('dev_Groups'),
+  DYNAMODB_USERS_TABLE: z.string().default('dev_Users'),
+
   // Clerk Authentication
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string(),
   CLERK_SECRET_KEY: z.string(),
