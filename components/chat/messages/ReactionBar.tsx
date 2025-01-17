@@ -1,6 +1,6 @@
 'use client'
 
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -28,7 +28,7 @@ export function ReactionBar({
     <div className={cn('flex flex-wrap gap-1', className)}>
       <TooltipProvider>
         {Object.entries(reactions).map(([emoji, reaction]) => {
-          const hasReacted = user?.id && reaction.users.includes(user.id)
+          const hasReacted = user?.sub && reaction.users.includes(user.sub)
           return (
             <Tooltip key={emoji}>
               <TooltipTrigger asChild>
@@ -38,7 +38,7 @@ export function ReactionBar({
                     'rounded-full border px-2 py-0.5 text-sm hover:bg-gray-100 transition-colors',
                     hasReacted && 'bg-gray-100 border-gray-300'
                   )}
-                  disabled={!user?.id}
+                  disabled={!user?.sub}
                 >
                   {emoji} {reaction.count}
                 </button>

@@ -1,42 +1,30 @@
-// Core User type that represents a user in our system
-export interface BaseUser {
-  id: string
-  email: string
-  displayName: string
-  avatarUrl?: string
-  createdAt: number
-}
-
-// Extended User type with UI-specific properties
+// Main User type for the application
 export interface User {
-  id: string
-  email: string
-  displayName: string
-  fullName?: string
-  imageUrl?: string
-  status?: 'online' | 'offline' | 'away' | 'busy'
+  id: string              // Hash Key
+  email: string          // GSI: EmailIndex
+  displayName: string    // GSI: displayNameIndex
+  auth0Id: string       // GSI: Auth0IdIndex
+  lastActiveAt: number  // GSI: LastActiveIndex
+  imageUrl?: string     // Optional field
+  createdAt: string
+  updatedAt: string
   metadata?: Record<string, any>
 }
 
-// User status type
+// User status type for real-time features
 export type UserStatus = 'online' | 'offline' | 'away' | 'busy'
 
-// User as stored in DynamoDB
-export interface DynamoUser extends BaseUser {
-  clerkId: string
-  preferences: Record<string, any>
-}
-
-// User status as stored in DynamoDB
+// User status record for real-time features
 export interface UserStatusRecord {
   userId: string
   status: UserStatus
   lastActiveAt: number
 }
 
-// Application-level User type that combines UI and data properties
-export interface AppUser extends User {
-  isOnline?: boolean
-  lastActive?: Date
-  preferences?: Record<string, any>
+// Type for updating user properties
+export interface UserUpdate {
+  displayName?: string
+  imageUrl?: string
+  metadata?: Record<string, any>
+  lastActiveAt?: number
 } 

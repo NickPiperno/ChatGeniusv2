@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, forwardRef } from 'react'
+import { useState, useRef, useCallback, forwardRef, useEffect } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -31,19 +31,19 @@ import { FilePreview } from '@/components/chat/input/FilePreview'
 import { logger } from '@/lib/logger'
 import { validateFile } from '@/lib/fileValidation'
 import { fetchApi } from '@/lib/api-client'
+import { Message } from '@/types/models/message'
 
 interface ChatSettings {
   enterToSend: boolean
 }
 
 interface MessageInputTiptapProps {
-  onSendMessage: (content: string, attachments?: Array<{
-    id: string
-    name: string
-    url: string
-    type: 'document' | 'image'
-  }>) => Promise<void>
-  chatSettings: ChatSettings
+  onSendMessage: (content: string, attachments?: { id: string; name: string; url: string; type: 'image' | 'document'; size: number }[]) => Promise<void>
+  onEditMessage?: (content: string) => Promise<void>
+  editingMessage?: Message | null
+  chatSettings: {
+    enterToSend: boolean
+  }
   users: User[]
   isReplying?: boolean
   placeholder?: string
@@ -83,6 +83,7 @@ interface FileUploadResult {
   name: string
   url: string
   type: 'document' | 'image'
+  size: number
 }
 
 const MentionList = ({ items, command }: MentionListProps) => {
@@ -106,6 +107,8 @@ const MentionList = ({ items, command }: MentionListProps) => {
 
 export function MessageInputTiptap({
   onSendMessage,
+  onEditMessage,
+  editingMessage,
   chatSettings,
   users,
   isReplying = false,
@@ -202,6 +205,13 @@ export function MessageInputTiptap({
     isEmpty: editor?.isEmpty
   })
 
+  // Update editor content when editingMessage changes
+  useEffect(() => {
+    if (editingMessage && editor) {
+      editor.commands.setContent(editingMessage.content)
+    }
+  }, [editingMessage, editor])
+
   const handleSendMessage = async () => {
     if (!editor) return
 
@@ -211,6 +221,12 @@ export function MessageInputTiptap({
     if (isEmpty && uploadedFiles.length === 0) return
 
     try {
+      if (editingMessage && onEditMessage) {
+        await onEditMessage(content)
+        editor.commands.clearContent()
+        return
+      }
+
       const uploadedAttachments: FileUploadResult[] = []
       
       if (uploadedFiles.length > 0) {
@@ -394,7 +410,8 @@ export function MessageInputTiptap({
         id: fileData.id,
         name: fileData.name,
         url: fileData.url,
-        type: fileData.type || 'document'
+        type: fileData.type || 'document',
+        size: file.size
       }
     } catch (error) {
       console.error('Error uploading file:', error)

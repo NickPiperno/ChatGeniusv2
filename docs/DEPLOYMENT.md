@@ -46,9 +46,9 @@ DYNAMODB_MESSAGES_TABLE=<YOUR_MESSAGES_TABLE>
 DYNAMODB_GROUPS_TABLE=<YOUR_GROUPS_TABLE>
 DYNAMODB_USERS_TABLE=<YOUR_USERS_TABLE>
 
-# Clerk Authentication
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<YOUR_CLERK_PUBLISHABLE_KEY>
-CLERK_SECRET_KEY=<YOUR_CLERK_SECRET_KEY>
+# Auth0 Authentication
+NEXT_PUBLIC_AUTH0_CLIENT_ID=<YOUR_AUTH0_CLIENT_ID>
+AUTH0_CLIENT_SECRET=<YOUR_AUTH0_CLIENT_SECRET>
 
 # API Configuration
 NEXT_PUBLIC_API_URL=<YOUR_PRODUCTION_URL>  # e.g., https://your-domain.com
@@ -182,7 +182,7 @@ npm update
 2. Rotate credentials regularly:
    - AWS access keys
    - MongoDB connection strings
-   - Clerk API keys
+   - Auth0 API keys
 
 3. Monitor logs and metrics:
    - PM2 logs

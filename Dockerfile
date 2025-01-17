@@ -15,16 +15,15 @@ ENV NODE_ENV=production \
     AWS_REGION=us-east-2 \
     AWS_ACCESS_KEY_ID=dummy-build-key \
     AWS_SECRET_ACCESS_KEY=dummy-build-secret \
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=dummy-build-key \
-    CLERK_SECRET_KEY=dummy-build-secret \
     MONGODB_URI=mongodb://dummy-build-uri \
     DYNAMODB_MESSAGES_TABLE=dev_Messages \
     DYNAMODB_GROUPS_TABLE=dev_Groups \
     DYNAMODB_USERS_TABLE=dev_Users \
-    NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in \
-    NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up \
-    NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/ \
-    NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/
+    AUTH0_SECRET=dummy-secret \
+    AUTH0_BASE_URL=https://localhost:3000 \
+    AUTH0_ISSUER_BASE_URL=https://dummy.auth0.com \
+    AUTH0_CLIENT_ID=dummy-client-id \
+    AUTH0_CLIENT_SECRET=dummy-client-secret
 
 # Build the application
 RUN npm run build
@@ -32,7 +31,8 @@ RUN npm run build
 # Remove build-time credentials
 ENV AWS_ACCESS_KEY_ID= \
     AWS_SECRET_ACCESS_KEY= \
-    CLERK_SECRET_KEY= \
+    AUTH0_CLIENT_SECRET= \
+    AUTH0_SECRET= \
     MONGODB_URI=
 
 # Expose port 3000

@@ -102,15 +102,12 @@ export async function createCombinedServer() {
     path: '/api/socketio',
     transports: ['websocket', 'polling'],
     cors: {
-      origin: true,
+      origin: process.env.NODE_ENV === 'development' 
+        ? 'http://localhost:3000'
+        : process.env.NEXT_PUBLIC_API_URL,
       methods: ['GET', 'POST'],
-      credentials: true,
-      allowedHeaders: ['content-type']
-    },
-    allowEIO3: true,
-    pingTimeout: 60000,
-    pingInterval: 25000,
-    connectTimeout: 45000
+      credentials: true
+    }
   })
 
   const dynamoDb = new DynamoDBService()

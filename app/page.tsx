@@ -44,12 +44,12 @@ export default function LandingPage() {
             <span className="text-xl font-bold">ChatGenius</span>
           </div>
           <div className="flex items-center space-x-4">
-            <Link href="/sign-in">
+            <a href="/api/auth/login">
               <Button variant="ghost">Sign In</Button>
-            </Link>
-            <Link href="/sign-up">
+            </a>
+            <a href="/api/auth/login?screen_hint=signup">
               <Button>Get Started</Button>
-            </Link>
+            </a>
           </div>
         </div>
       </nav>
@@ -65,17 +65,17 @@ export default function LandingPage() {
             a messaging experience that's both powerful and effortless.
           </p>
           <div className="flex justify-center space-x-4">
-            <Link href="/sign-up">
+            <a href="/api/auth/login?screen_hint=signup">
               <Button size="lg" className="text-lg">
                 Get Started Free
                 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
-            </Link>
-            <Link href="/sign-in">
+            </a>
+            <a href="/api/auth/login">
               <Button size="lg" variant="outline" className="text-lg">
                 Sign In
               </Button>
-            </Link>
+            </a>
           </div>
         </div>
       </section>
@@ -121,12 +121,12 @@ export default function LandingPage() {
           <p className="text-xl text-gray-600 dark:text-gray-300 mb-8 max-w-2xl mx-auto">
             Join thousands of users who have already transformed their messaging experience.
           </p>
-          <Link href="/sign-up">
+          <a href="/api/auth/login?screen_hint=signup">
             <Button size="lg" className="text-lg">
               Get Started Now
               <ArrowRight className="ml-2 h-5 w-5" />
             </Button>
-          </Link>
+          </a>
         </div>
       </section>
 

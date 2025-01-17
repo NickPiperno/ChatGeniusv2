@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { MessageContent } from './MessageContent'
 import { ThreadPreview } from '../thread/ThreadPreview'
 import { cn } from '@/lib/utils'
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import { formatDistanceToNow } from 'date-fns'
 import {
   DropdownMenu,

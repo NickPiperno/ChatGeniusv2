@@ -1,67 +1,43 @@
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs'
+import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
+import { Server } from 'socket.io'
+
+declare global {
+  var io: Server | undefined
+}
 
 const dynamoDb = new DynamoDBService()
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const { userId } = auth()
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    const session = await getSession()
+    if (!session?.user?.sub) {
+      return new NextResponse("Unauthorized", { status: 401 })
     }
 
-    const { displayName } = await request.json()
+    const { displayName } = await req.json()
     if (!displayName) {
-      return NextResponse.json(
-        { error: 'displayName is required' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Display name is required' }, { status: 400 })
     }
 
-    // Validate displayName format
-    const displayNameRegex = /^[a-zA-Z0-9_]{3,20}$/
-    if (!displayNameRegex.test(displayName)) {
-      return NextResponse.json(
-        { error: 'displayName must be 3-20 characters long and can only contain letters, numbers, and underscores' },
-        { status: 400 }
-      )
+    // Check if display name is already taken
+    const existingUser = await dynamoDb.getUserByAuthId(session.user.sub)
+    if (!existingUser) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    // Check if displayName is already taken in DynamoDB
-    // You'll need to add a method to check by displayName
-    const existingUser = await dynamoDb.getUserBydisplayName(displayName)
-    if (existingUser && existingUser.id !== userId) {
-      return NextResponse.json(
-        { error: 'displayName is already taken' },
-        { status: 400 }
-      )
-    }
+    // Update the user's display name
+    const updatedUser = await dynamoDb.updateUser(existingUser.id, { displayName })
 
-    // Update user in DynamoDB
-    const updatedUser = await dynamoDb.updateUser(userId, { name: displayName })
-
-    // Broadcast displayName update to all connected clients
+    // Notify connected clients about the display name change
     if (global.io) {
-      global.io.emit('displayName_updated', {
-        userId,
-        displayName
-      })
+      global.io.emit('user_updated', updatedUser)
     }
 
-    return NextResponse.json({ 
-      success: true,
-      displayName, // Use the validated displayName directly since updatedUser may not have displayName property
-      message: 'displayName updated successfully'
-    })
+    return NextResponse.json({ message: 'Display name updated successfully' })
   } catch (error) {
-    console.error('Error updating displayName:', error)
-    return NextResponse.json(
-      { error: 'Error updating displayName' },
-      { status: 500 }
-    )
+    console.error('Error updating display name:', error)
+    return NextResponse.json({ error: 'Error updating display name' }, { status: 500 })
   }
 }

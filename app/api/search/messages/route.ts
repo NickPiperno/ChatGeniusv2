@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs'
+import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService, convertToMessage } from '@/lib/services/dynamodb'
 import { SearchParams, SearchResponse } from '@/types/search'
 import { DynamoDBMessage } from '@/types/models/dynamodb'
@@ -12,13 +12,14 @@ export async function GET(request: NextRequest) {
   console.log('[Search API] Received search request')
   
   try {
-    const { userId } = auth()
-    console.log('[Search API] Auth check:', { userId, hasUserId: !!userId })
+    const session = await getSession()
+    console.log('[Search API] Auth check:', { userId: session?.user?.sub, hasUserId: !!session?.user?.sub })
     
-    if (!userId) {
+    if (!session?.user?.sub) {
       console.log('[Search API] Unauthorized - no userId')
       return new NextResponse('Unauthorized', { status: 401 })
     }
+    const userId = session.user.sub
 
     // Get search parameters from URL
     const searchParams = request.nextUrl.searchParams

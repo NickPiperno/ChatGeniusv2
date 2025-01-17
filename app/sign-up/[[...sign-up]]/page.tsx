@@ -1,16 +1,17 @@
-import { SignUp } from "@clerk/nextjs";
+'use client'
+
+import { useEffect } from 'react'
 
 export default function SignUpPage() {
+  useEffect(() => {
+    window.location.href = '/api/auth/login?screen_hint=signup'
+  }, [])
+
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <SignUp 
-        appearance={{
-          elements: {
-            formButtonPrimary: 'bg-indigo-500 hover:bg-indigo-600',
-            footerActionLink: 'text-indigo-500 hover:text-indigo-600'
-          }
-        }}
-      />
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="text-center">
+        Redirecting to sign up...
+      </div>
     </div>
-  );
+  )
 } 

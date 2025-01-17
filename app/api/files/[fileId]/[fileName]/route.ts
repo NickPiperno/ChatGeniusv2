@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MongoClient, GridFSBucket, ObjectId } from 'mongodb'
-import { auth } from '@clerk/nextjs'
+import { getSession } from '@auth0/nextjs-auth0'
 import { logger } from '@/lib/logger'
 
 if (!process.env.MONGODB_URI) {
@@ -25,11 +25,12 @@ export async function GET(
   { params }: { params: { fileId: string; fileName: string } }
 ) {
   try {
-    const { userId } = auth()
-    if (!userId) {
+    const session = await getSession()
+    if (!session?.user?.sub) {
       return new NextResponse('Unauthorized', { status: 401 })
     }
 
+    const userId = session.user.sub
     logger.debug('File download requested', { fileId: params.fileId, fileName: params.fileName })
 
     const client = await connectToDatabase()

@@ -1,17 +1,17 @@
-import '@/styles/globals.css'
-import '@/styles/mentions.css'
+import './globals.css'
 import { Inter } from 'next/font/google'
 import { Toaster } from '@/components/ui/toaster'
-import { ToastProvider } from '@/hooks/ui/use-toast'
-import {
-  ClerkProvider,
-} from '@clerk/nextjs'
-import { AppLayout } from '@/components/AppLayout'
-import { GoogleOAuthProvider } from '@react-oauth/google'
 import { ThemeProvider } from '@/components/ui/theme-provider'
+import { UserProvider } from '@auth0/nextjs-auth0/client'
 import { SocketProvider } from '@/hooks/realtime'
+import { ToastProvider } from '@/hooks/ui/use-toast'
 
 const inter = Inter({ subsets: ['latin'] })
+
+export const metadata = {
+  title: 'ChatGenius',
+  description: 'Next-generation chat application',
+}
 
 export default function RootLayout({
   children,
@@ -19,30 +19,25 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <ClerkProvider>
-      <html lang="en" suppressHydrationWarning>
-        <head />
-        <body className={inter.className}>
-          <GoogleOAuthProvider clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!}>
-            <ThemeProvider
-              attribute="class"
-              defaultTheme="system"
-              enableSystem
-              disableTransitionOnChange
-            >
-              <ToastProvider>
-                <SocketProvider>
-                  <AppLayout>
-                    {children}
-                  </AppLayout>
-                  <Toaster />
-                </SocketProvider>
-              </ToastProvider>
-            </ThemeProvider>
-          </GoogleOAuthProvider>
-        </body>
-      </html>
-    </ClerkProvider>
+    <html lang="en" suppressHydrationWarning>
+      <body className={inter.className}>
+        <UserProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <ToastProvider>
+              <SocketProvider>
+                {children}
+                <Toaster />
+              </SocketProvider>
+            </ToastProvider>
+          </ThemeProvider>
+        </UserProvider>
+      </body>
+    </html>
   )
 }
 

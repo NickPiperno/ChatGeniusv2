@@ -1,13 +1,16 @@
-import { UserButton } from "@clerk/nextjs"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { cn } from "@/lib/utils"
+import { UserStatus } from "@/types/models/user"
+import { useState } from "react"
 
 interface UserAvatarProps {
-  userId?: string
   imageUrl?: string
+  fallback?: string
   size?: "sm" | "md" | "lg"
   showStatus?: boolean
-  status?: "online" | "away" | "busy" | "offline"
+  status?: UserStatus
   className?: string
+  onError?: () => void
 }
 
 const statusColors = {
@@ -18,13 +21,16 @@ const statusColors = {
 }
 
 export function UserAvatar({
-  userId,
   imageUrl,
+  fallback = "?",
   size = "md",
   showStatus = false,
   status = "offline",
-  className
+  className,
+  onError
 }: UserAvatarProps) {
+  const [imageError, setImageError] = useState(false)
+
   const sizes = {
     sm: "w-6 h-6",
     md: "w-8 h-8",
@@ -37,29 +43,25 @@ export function UserAvatar({
     lg: "w-3 h-3"
   }
 
+  const handleImageError = () => {
+    setImageError(true)
+    onError?.()
+  }
+
   return (
     <div className={cn("relative", className)}>
-      {userId ? (
-        <UserButton 
-          afterSignOutUrl="/sign-in"
-          appearance={{
-            elements: {
-              avatarBox: sizes[size]
-            }
-          }}
-        />
-      ) : (
-        <div className={cn(
-          "rounded-full overflow-hidden",
-          sizes[size]
-        )}>
-          <img 
-            src={imageUrl || "/default-avatar.png"} 
+      <Avatar className={sizes[size]}>
+        {!imageError && imageUrl && (
+          <AvatarImage 
+            src={imageUrl} 
             alt="User avatar" 
-            className="w-full h-full object-cover"
+            onError={handleImageError}
           />
-        </div>
-      )}
+        )}
+        <AvatarFallback>
+          {fallback.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
       
       {showStatus && (
         <div className={cn(

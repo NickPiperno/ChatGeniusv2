@@ -15,7 +15,7 @@ import { logger } from '@/lib/logger'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { VirtualizedList } from '@/components/ui/virtualized-list'
 import { toast } from '@/components/ui/use-toast'
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import {
   DropdownMenu,
   DropdownMenuContent,

@@ -1,21 +1,20 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { SearchBar } from '@/components/SearchBar'
 import { useSearch } from '@/hooks/use-search'
-import { ClerkProvider } from '@clerk/nextjs'
+import { UserProvider } from '@auth0/nextjs-auth0/client'
 
-// Mock Clerk
-jest.mock('@clerk/nextjs', () => ({
-  ClerkProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+// Mock Auth0
+jest.mock('@auth0/nextjs-auth0/client', () => ({
+  UserProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   useUser: () => ({
     user: {
-      id: 'test-user-id',
-      fullName: 'Test User',
-      primaryEmailAddress: {
-        emailAddress: 'test@example.com'
-      }
+      sub: 'test-user-id',
+      name: 'Test User',
+      email: 'test@example.com',
+      picture: 'https://example.com/picture.jpg'
     },
-    isLoaded: true,
-    isSignedIn: true
+    isLoading: false,
+    error: undefined
   })
 }))
 
@@ -23,10 +22,16 @@ jest.mock('@clerk/nextjs', () => ({
 jest.mock('@/hooks/use-search')
 const mockUseSearch = useSearch as jest.Mock
 
-// Mock useRouter
+// Mock Next.js router
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: jest.fn()
+  useRouter: jest.fn(() => ({
+    push: jest.fn(),
+    replace: jest.fn(),
+    refresh: jest.fn()
+  })),
+  useSearchParams: () => ({
+    get: jest.fn(),
+    set: jest.fn()
   })
 }))
 
@@ -40,9 +45,9 @@ jest.mock('react-virtualized-auto-sizer', () => ({
 // Create a wrapper component with providers
 const Wrapper = ({ children }: { children: React.ReactNode }) => {
   return (
-    <ClerkProvider publishableKey="test-key">
+    <UserProvider>
       {children}
-    </ClerkProvider>
+    </UserProvider>
   )
 }
 

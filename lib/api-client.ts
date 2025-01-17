@@ -1,16 +1,9 @@
 export function getBaseUrl() {
-  if (typeof window !== 'undefined') {
-    // We're in the browser
-    return window.location.origin;
+  if (!process.env.NEXT_PUBLIC_API_URL) {
+    console.error('NEXT_PUBLIC_API_URL is not defined');
+    return '';
   }
-  
-  // We're on the server
-  if (process.env.NODE_ENV === 'production') {
-    return `https://${process.env.VERCEL_URL}`;
-  }
-  
-  // Development
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+  return process.env.NEXT_PUBLIC_API_URL;
 }
 
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {

@@ -1,6 +1,6 @@
 # ChatGenius
 
-A real-time chat application built with Next.js, DynamoDB, and Clerk Authentication.
+A real-time chat application built with Next.js, DynamoDB, and Auth0 Authentication.
 
 ## Setup
 
@@ -55,7 +55,7 @@ npm run dev
 
 3. Required environment variables in Amplify Console:
    - AWS configuration
-   - Clerk authentication
+   - Auth0 authentication
    - DynamoDB table names
    - Node environment
 
@@ -68,7 +68,7 @@ npm run dev
 - Message reactions
 - Thread discussions
 - Typing indicators
-- User authentication via Clerk
+- User authentication via Auth0
 - DynamoDB for data storage
 
 ## Security Notes
@@ -76,7 +76,7 @@ npm run dev
 - Never commit `.env` files
 - Never commit AWS credentials
 - Use IAM roles and policies in production
-- Keep Clerk secrets secure
+- Keep Auth0 secrets secure
 
 ## License
 

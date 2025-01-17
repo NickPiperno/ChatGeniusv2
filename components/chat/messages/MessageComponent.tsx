@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useUser } from "@clerk/nextjs"
+import { useUser } from "@auth0/nextjs-auth0/client"
 import { format, isSameDay, formatDistanceToNow, parseISO } from "date-fns"
 import { MessageSquare, MoreVertical, Paperclip } from "lucide-react"
 import ReactMarkdown from 'react-markdown'

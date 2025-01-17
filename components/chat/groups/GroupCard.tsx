@@ -6,7 +6,7 @@ import { Hash, MoreVertical, Pencil, Trash2, Crown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Group } from '@/types/models/group'
 import { cn } from '@/lib/utils'
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import { useUsers } from '@/hooks/data/use-users'
 import {
   DropdownMenu,

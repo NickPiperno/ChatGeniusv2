@@ -1,23 +1,17 @@
-import { SignIn } from "@clerk/nextjs";
-import { Metadata } from "next";
+'use client'
 
-export const metadata: Metadata = {
-  title: 'Sign In - ChatGenius',
-  description: 'Sign in to your ChatGenius account',
-  robots: 'noindex, nofollow',
-};
+import { useEffect } from 'react'
 
 export default function SignInPage() {
+  useEffect(() => {
+    window.location.href = '/api/auth/login'
+  }, [])
+
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <SignIn 
-        appearance={{
-          elements: {
-            formButtonPrimary: 'bg-indigo-500 hover:bg-indigo-600',
-            footerActionLink: 'text-indigo-500 hover:text-indigo-600'
-          }
-        }}
-      />
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="text-center">
+        Redirecting to login...
+      </div>
     </div>
-  );
+  )
 } 

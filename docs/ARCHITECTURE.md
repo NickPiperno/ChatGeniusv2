@@ -128,7 +128,7 @@ The application includes comprehensive health monitoring:
 - Error rates
 
 ## Security
-- Authentication via Clerk
+- Authentication via Auth0
 - CORS configuration for API and WebSocket
 - Input validation
 - Rate limiting

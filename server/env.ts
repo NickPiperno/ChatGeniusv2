@@ -43,13 +43,16 @@ const envSchema = z.object({
   DYNAMODB_GROUPS_TABLE: z.string().default('dev_Groups'),
   DYNAMODB_USERS_TABLE: z.string().default('dev_Users'),
 
-  // Clerk Authentication
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string(),
-  CLERK_SECRET_KEY: z.string(),
-  NEXT_PUBLIC_CLERK_SIGN_IN_URL: z.string().default('/sign-in'),
-  NEXT_PUBLIC_CLERK_SIGN_UP_URL: z.string().default('/sign-up'),
-  NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: z.string().default('/'),
-  NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: z.string().default('/')
+  // Auth0 Configuration
+  AUTH0_SECRET: z.string(),
+  AUTH0_BASE_URL: z.string().refine((url) => isValidUrlOrPlatformVar(url), {
+    message: "AUTH0_BASE_URL must be a valid URL or platform variable"
+  }),
+  AUTH0_ISSUER_BASE_URL: z.string().url(),
+  AUTH0_CLIENT_ID: z.string(),
+  AUTH0_CLIENT_SECRET: z.string(),
+  AUTH0_AUDIENCE: z.string().optional(),
+  AUTH0_SCOPE: z.string().default('openid profile email')
 })
 
 // Validate environment variables

@@ -877,41 +877,65 @@ export class DynamoDBService {
 
   async getGroupsByUserId(userId: string): Promise<GroupChat[]> {
     try {
+      console.log('[DynamoDB] Getting all groups for user:', userId)
+      
+      // Get all groups since all users should have access to all groups
       const result = await dynamodb.send(new ScanCommand({
         TableName: TableNames.GroupChats
       }))
 
-      return (result.Items || []).map(item => ({
-        id: item.id,
-        name: item.name,
-        createdAt: item.createdAt,
-        userId: item.userId,
-      }))
+      const groups = (result.Items || []) as GroupChat[]
+      console.log('[DynamoDB] Found groups:', {
+        count: groups.length,
+        groups: groups.map(g => ({ id: g.id, name: g.name }))
+      })
+
+      return groups
     } catch (error) {
-      console.error('Error getting groups:', error)
+      console.error('[DynamoDB] Error getting groups:', error)
       throw error
     }
   }
 
-  async ensureUserInGroup(userId: string, groupId: string): Promise<void> {
-    console.log('[DynamoDB] Ensuring user is in group:', { userId, groupId })
+  async ensureUserInGroup(userIds: string | string[], groupId: string): Promise<void> {
+    const users = Array.isArray(userIds) ? userIds : [userIds]
+    console.log('[DynamoDB] Ensuring users are in group:', { users, groupId })
     
     try {
+      // Get current group to check existing members
+      const group = await this.getGroupById(groupId)
+      if (!group) {
+        throw new Error('Group not found')
+      }
+
+      // Get current members or empty array
+      const currentMembers = group.members || []
+
+      // Add any missing users
+      const newMembers = users.filter(userId => !currentMembers.includes(userId))
+      if (newMembers.length === 0) {
+        console.log('[DynamoDB] All users already in group')
+        return
+      }
+
+      // Update group with new members
       await dynamodb.send(new UpdateCommand({
         TableName: TableNames.GroupChats,
         Key: { id: groupId },
-        UpdateExpression: 'SET members = list_append(if_not_exists(members, :empty_list), :new_member)',
+        UpdateExpression: 'SET members = list_append(if_not_exists(members, :empty_list), :new_members)',
         ExpressionAttributeValues: {
           ':empty_list': [],
-          ':new_member': [userId]
+          ':new_members': newMembers
         }
       }))
       
-      console.log('[DynamoDB] Successfully added user to group')
+      console.log('[DynamoDB] Successfully added users to group:', {
+        addedUsers: newMembers.length
+      })
     } catch (error) {
-      console.error('[DynamoDB] Error adding user to group:', {
+      console.error('[DynamoDB] Error adding users to group:', {
         error,
-        userId,
+        users,
         groupId,
         errorMessage: error instanceof Error ? error.message : 'Unknown error'
       })
@@ -1182,28 +1206,33 @@ export class DynamoDBService {
   // Users
   async createUser(user: User): Promise<User> {
     console.log('[DynamoDB] Creating user:', {
-      id: user.id,
-      displayName: user.displayName
+      userId: user.id,
+      email: user.email
     })
     
     try {
-      const item = {
-        ...user,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        metadata: user.metadata || {}
-      }
-
       await dynamodb.send(new PutCommand({
         TableName: TableNames.Users,
-        Item: item,
-        ConditionExpression: 'attribute_not_exists(id)'
+        Item: {
+          id: user.id,
+          auth0Id: user.auth0Id,
+          email: user.email,
+          displayName: user.displayName,
+          imageUrl: user.imageUrl,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+          lastActiveAt: user.lastActiveAt
+        }
       }))
       
-      console.log('[DynamoDB] Successfully created user')
-      return item
+      console.log('[DynamoDB] Successfully created user:', user.id)
+      return user
     } catch (error) {
-      console.error('[DynamoDB] Error creating user:', error)
+      console.error('[DynamoDB] Error creating user:', {
+        error,
+        userId: user.id,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error'
+      })
       throw error
     }
   }
@@ -1296,6 +1325,96 @@ export class DynamoDBService {
         imageUrl: item.imageUrl || ''
       },
       replies: []
+    }
+  }
+
+  async getUserByAuthId(auth0Id: string): Promise<User | null> {
+    console.log('[DynamoDB] Getting user by Auth0 ID:', auth0Id)
+    
+    try {
+      const result = await dynamodb.send(new QueryCommand({
+        TableName: TableNames.Users,
+        IndexName: 'Auth0IdIndex',
+        KeyConditionExpression: 'auth0Id = :auth0Id',
+        ExpressionAttributeValues: {
+          ':auth0Id': auth0Id
+        }
+      }))
+
+      if (!result.Items || result.Items.length === 0) {
+        return null
+      }
+
+      return result.Items[0] as User
+    } catch (error) {
+      console.error('[DynamoDB] Error getting user by Auth0 ID:', {
+        auth0Id,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      })
+      throw error
+    }
+  }
+
+  // Group Chats
+  async getAllGroups(): Promise<GroupChat[]> {
+    console.log('[DynamoDB] Getting all groups')
+    
+    try {
+      const result = await dynamodb.send(new ScanCommand({
+        TableName: TableNames.GroupChats
+      }))
+      
+      console.log('[DynamoDB] Groups scan result:', {
+        count: result.Count,
+        scannedCount: result.ScannedCount
+      })
+      
+      return (result.Items || []) as GroupChat[]
+    } catch (error) {
+      console.error('[DynamoDB] Error getting all groups:', error)
+      throw error
+    }
+  }
+
+  async updateAllGroupsWithAllUsers(): Promise<void> {
+    console.log('[DynamoDB] Starting update of all groups with all users')
+    
+    try {
+      // Get all users
+      const allUsers = await this.getAllUsers()
+      const userIds = allUsers.map(user => user.id)
+      
+      console.log('[DynamoDB] Found users:', {
+        count: userIds.length,
+        userIds
+      })
+
+      // Get all groups
+      const allGroups = await this.getAllGroups()
+      console.log('[DynamoDB] Found groups:', {
+        count: allGroups.length,
+        groups: allGroups.map(g => ({ id: g.id, name: g.name }))
+      })
+
+      // Update each group
+      for (const group of allGroups) {
+        console.log('[DynamoDB] Updating group:', {
+          id: group.id,
+          name: group.name,
+          currentMembers: group.members?.length || 0,
+          newMembers: userIds.length
+        })
+
+        await this.updateGroup(group.id, {
+          members: userIds,
+          updatedAt: new Date().toISOString()
+        })
+      }
+
+      console.log('[DynamoDB] Successfully updated all groups with all users')
+    } catch (error) {
+      console.error('[DynamoDB] Error updating groups with users:', error)
+      throw error
     }
   }
 }

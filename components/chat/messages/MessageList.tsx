@@ -18,7 +18,7 @@ interface MessageListProps {
 }
 
 export function MessageList({
-  messages,
+  messages = [],
   onReaction,
   onReply,
   onEdit,
@@ -28,12 +28,15 @@ export function MessageList({
   showThreadPreview = true,
   noPadding = false
 }: MessageListProps) {
+  // Handle cases where messages is not an array
+  const messageArray = Array.isArray(messages) ? messages : []
+
   return (
     <div className={cn(
       !noPadding && "px-4",
       className
     )}>
-      {messages.map((message) => (
+      {messageArray.map((message) => (
         <MessageItem
           key={message.id}
           message={message}
@@ -47,6 +50,11 @@ export function MessageList({
       {isLoading && (
         <div className="flex justify-center py-4">
           <LoadingSpinner />
+        </div>
+      )}
+      {!isLoading && messageArray.length === 0 && (
+        <div className="flex justify-center py-4 text-muted-foreground">
+          No messages yet
         </div>
       )}
     </div>

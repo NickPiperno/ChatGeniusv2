@@ -58,11 +58,12 @@ export function UserProfile({ userId }: UserProfileProps) {
         <div className="flex items-center space-x-4">
           <Avatar>
             <AvatarImage src={user.imageUrl} alt={user.displayName} />
-            <AvatarFallback>{user.displayName?.charAt(0)}</AvatarFallback>
+            <AvatarFallback>{user.displayName.charAt(0)}</AvatarFallback>
           </Avatar>
           <div>
             <h3 className="font-medium">{user.displayName}</h3>
             <p className="text-sm text-gray-500">{user.email}</p>
+            <p className="text-xs text-gray-400">Last active: {new Date(user.lastActiveAt).toLocaleString()}</p>
           </div>
         </div>
       </CardContent>

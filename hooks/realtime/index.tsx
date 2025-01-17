@@ -77,19 +77,24 @@ export function SocketProvider({ children }: SocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
-    // Get the base URL for the WebSocket connection
-    const baseUrl = window.location.origin
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL
+    if (!apiUrl) {
+      console.error('[Socket] NEXT_PUBLIC_API_URL is not defined')
+      return
+    }
 
-    console.log('[Socket] Connecting to:', baseUrl)
-    const newSocket = io(baseUrl, {
+    console.log('[Socket] Connecting to:', apiUrl)
+    const newSocket = io(apiUrl, {
       transports: ['websocket', 'polling'],
       path: '/api/socketio',
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       autoConnect: true,
       forceNew: true,
-      withCredentials: true,
-      timeout: 60000
+      ...(apiUrl.includes('localhost') && {
+        withCredentials: false,
+        timeout: 10000
+      })
     })
 
     newSocket.on('connect', () => {

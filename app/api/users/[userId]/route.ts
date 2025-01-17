@@ -1,6 +1,17 @@
+import { ManagementClient } from 'auth0'
 import { NextResponse } from 'next/server'
-import { clerkClient } from '@clerk/nextjs'
 import { DynamoDBService } from '@/lib/services/dynamodb'
+
+interface Auth0User {
+  nickname?: string;
+  picture?: string;
+}
+
+const auth0 = new ManagementClient({
+  domain: process.env.AUTH0_DOMAIN!,
+  clientId: process.env.AUTH0_CLIENT_ID!,
+  clientSecret: process.env.AUTH0_CLIENT_SECRET!,
+})
 
 const dynamoDb = new DynamoDBService()
 
@@ -9,17 +20,14 @@ export async function GET(
   { params }: { params: { userId: string } }
 ) {
   try {
-    const user = await clerkClient.users.getUser(params.userId)
-    const dbUser = await dynamoDb.getUserByClerkId(user.id)
+    const user = (await auth0.users.get({ id: params.userId })) as Auth0User
+    const dbUser = await dynamoDb.getUserById(params.userId)
     
     // Format the user data
     const formattedUser = {
-      id: user.id,
-      name: dbUser?.name || user.displayName || 'Anonymous',
-      displayName: user.firstName && user.lastName 
-        ? `${user.firstName} ${user.lastName}`
-        : dbUser?.name || user.displayName || 'Anonymous',
-      imageUrl: user.imageUrl,
+      id: params.userId,
+      displayName: dbUser?.displayName || user.nickname || 'Anonymous',
+      imageUrl: user.picture || null,
       status: 'offline'
     }
 

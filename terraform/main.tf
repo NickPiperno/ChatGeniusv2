@@ -136,13 +136,18 @@ resource "aws_dynamodb_table" "users" {
   }
 
   attribute {
-    name = "clerkId"
+    name = "auth0Id"
     type = "S"
   }
 
   attribute {
     name = "lastActiveAt"
     type = "N"
+  }
+
+  attribute {
+    name = "auth0Id"
+    type = "S"
   }
 
   global_secondary_index {
@@ -158,8 +163,8 @@ resource "aws_dynamodb_table" "users" {
   }
 
   global_secondary_index {
-    name               = "ClerkIdIndex"
-    hash_key           = "clerkId"
+    name               = "Auth0IdIndex"
+    hash_key           = "auth0Id"
     projection_type    = "ALL"
   }
 
@@ -167,6 +172,14 @@ resource "aws_dynamodb_table" "users" {
     name               = "LastActiveIndex"
     hash_key           = "lastActiveAt"
     projection_type    = "ALL"
+  }
+
+  global_secondary_index {
+    name               = "Auth0IdIndex"
+    hash_key           = "auth0Id"
+    projection_type    = "ALL"
+    read_capacity      = 5
+    write_capacity     = 5
   }
 
   tags = {

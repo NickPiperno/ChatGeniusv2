@@ -7,7 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { Settings, ChevronLeft, ChevronRight } from 'lucide-react'
 import { mockDirectMessages } from '@/lib/data'
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import { io } from 'socket.io-client'
 import { EditGroupDialog } from './dialogs/EditGroupDialog'
 import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible"

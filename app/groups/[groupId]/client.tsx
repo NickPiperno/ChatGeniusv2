@@ -6,13 +6,15 @@ import { Message } from '@/types/models/message'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { User } from '@/types/models/user'
 import { SearchBar } from '@/components/SearchBar'
-import { Hash } from 'lucide-react'
+import { Hash, Trash2 } from 'lucide-react'
 import { useSocket } from '@/hooks/realtime'
 import { useRouter } from 'next/navigation'
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import { useGroups } from '@/hooks/data/use-groups'
+import { Button } from '@/components/ui/button'
 import { logger } from '@/lib/logger'
 import { fetchApi } from '@/lib/api-client'
+import { AppLayout } from '@/components/AppLayout'
 
 interface GroupPageClientProps {
   group: Group
@@ -23,49 +25,42 @@ interface GroupPageClientProps {
 export function GroupPageClient({ group: initialGroup, messages, userId }: GroupPageClientProps) {
   const [chatSettings] = useState({ enterToSend: true })
   const [group, setGroup] = useState(initialGroup)
-  const { socket, isConnected } = useSocket()
+  const { socket } = useSocket()
   const router = useRouter()
   const { user } = useUser()
   const { refetch: refetchGroups, removeGroup } = useGroups()
   const SEARCH_BAR_HEIGHT = 48 // Height of the search bar
   const GROUP_HEADER_HEIGHT = 48 // Height of the group header
-  const isCreator = user?.id === group.userId
+  const isCreator = user?.sub === group.userId
 
   useEffect(() => {
-    if (!socket || !isConnected) {
-      console.log('[GroupPage] Socket not connected')
-      return
-    }
+    if (!socket) return
     
-    const handleGroupNameUpdate = (data: { groupId: string; name: string }) => {
-      if (data.groupId === group.id) {
-        setGroup(prev => ({ ...prev, name: data.name }))
+    socket.on('group_name_updated', ({ groupId, name }) => {
+      if (groupId === group.id) {
+        setGroup(prev => ({ ...prev, name }))
       }
-    }
-
-    console.log('[GroupPage] Setting up socket listeners')
-    socket.on('group_name_updated', handleGroupNameUpdate)
+    })
 
     return () => {
-      console.log('[GroupPage] Cleaning up socket listeners')
-      socket.off('group_name_updated', handleGroupNameUpdate)
+      socket.off('group_name_updated')
     }
-  }, [socket, isConnected, group.id])
+  }, [socket, group.id])
 
   useEffect(() => {
     logger.debug('Group member information:', {
       groupId: group.id,
       groupName: group.name,
       userId: group.userId,
-      currentUserId: user?.id,
-      isCreator: user?.id === group.userId,
+      currentUserId: user?.sub,
+      isCreator: user?.sub === group.userId,
       members: group.members ?? []
     })
 
     logger.debug('Group creator information:', {
       groupName: group.name,
       userId: group.userId,
-      isCurrentUserCreator: user?.id === group.userId
+      isCurrentUserCreator: user?.sub === group.userId
     })
   }, [group, user])
 
@@ -74,7 +69,7 @@ export function GroupPageClient({ group: initialGroup, messages, userId }: Group
 
     try {
       // Check if user is creator before attempting delete
-      if (user.id !== group.userId) {
+      if (user.sub !== group.userId) {
         throw new Error(`Only the group creator can delete this group. Creator ID: ${group.userId}`)
       }
 
@@ -105,7 +100,7 @@ export function GroupPageClient({ group: initialGroup, messages, userId }: Group
         groupName: group.name,
         groupId: group.id,
         userId: group.userId,
-        currentUserId: user.id
+        currentUserId: user.sub
       })
       throw error
     }
@@ -125,31 +120,46 @@ export function GroupPageClient({ group: initialGroup, messages, userId }: Group
   // Create User objects from member IDs
   const users: User[] = members.map(id => ({
     id,
-    name: '', // These will be populated by the server
+    auth0Id: id,
     email: '',
     displayName: '',
-    createdAt: Date.now(), // Use timestamp in milliseconds
-    avatarUrl: ''
+    imageUrl: '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastActiveAt: Date.now()
   }))
 
   return (
-    <div className="flex flex-col h-full">
-      <SearchBar />
-      <div className="sticky top-[48px] z-10 h-12 flex items-center px-6 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex items-center gap-2">
-          <Hash className="h-4 w-4 text-muted-foreground" />
-          <h1 className="font-semibold text-lg truncate">{group.name}</h1>
+    <AppLayout>
+      <div className="flex flex-col h-full">
+        <div className="sticky top-0 z-10 h-12 flex items-center px-6 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-2">
+              <Hash className="h-4 w-4 text-muted-foreground" />
+              <h1 className="font-semibold text-lg truncate">{group.name}</h1>
+            </div>
+            {isCreator && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-red-500 hover:text-red-600 hover:bg-red-100/10"
+                onClick={handleDeleteGroup}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <ChatInterface 
+            groupId={group.id}
+            users={users}
+            chatSettings={chatSettings}
+            headerHeight={GROUP_HEADER_HEIGHT}
+            searchBarHeight={0}
+          />
         </div>
       </div>
-      <div className="flex-1 overflow-hidden flex flex-col">
-        <ChatInterface 
-          groupId={group.id}
-          users={users}
-          chatSettings={chatSettings}
-          headerHeight={GROUP_HEADER_HEIGHT}
-          searchBarHeight={SEARCH_BAR_HEIGHT}
-        />
-      </div>
-    </div>
+    </AppLayout>
   )
 }

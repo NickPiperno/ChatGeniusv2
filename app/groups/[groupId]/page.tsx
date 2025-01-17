@@ -1,11 +1,10 @@
 import { Metadata } from 'next'
-import { notFound } from 'next/navigation'
-import { auth } from '@clerk/nextjs'
+import { notFound, redirect } from 'next/navigation'
+import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 import { Group } from '@/types/models/group'
 import { GroupChat, DynamoDBMessage } from '@/types/models/dynamodb'
 import { GroupPageClient } from './client'
-import { redirect } from 'next/navigation'
 
 interface GroupPageProps {
   params: {
@@ -32,8 +31,9 @@ export async function generateMetadata({ params }: GroupPageProps): Promise<Meta
 }
 
 export default async function GroupPage({ params }: { params: { groupId: string } }) {
-  const { userId } = auth()
-  if (!userId) redirect('/')
+  const session = await getSession()
+  if (!session?.user) redirect('/api/auth/login')
+  const userId = session.user.sub
 
   const dynamoDb = new DynamoDBService()
   const dbGroup = await dynamoDb.getGroupById(params.groupId)

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs'
+import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
 const dynamoDb = new DynamoDBService()
@@ -10,8 +10,9 @@ export async function GET(
   { params }: { params: { groupId: string } }
 ) {
   try {
-    const { userId } = auth()
-    if (!userId) return new NextResponse('Unauthorized', { status: 401 })
+    const session = await getSession()
+    if (!session?.user?.sub) return new NextResponse('Unauthorized', { status: 401 })
+    const userId = session.user.sub
 
     const { groupId } = params
     
@@ -32,8 +33,9 @@ export async function POST(
   { params }: { params: { groupId: string } }
 ) {
   try {
-    const { userId } = auth()
-    if (!userId) return new NextResponse('Unauthorized', { status: 401 })
+    const session = await getSession()
+    if (!session?.user?.sub) return new NextResponse('Unauthorized', { status: 401 })
+    const userId = session.user.sub
 
     const { groupId } = params
     const data = await request.json()

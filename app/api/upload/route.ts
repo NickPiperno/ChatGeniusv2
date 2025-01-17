@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { MongoClient, GridFSBucket, ObjectId } from 'mongodb'
 import { v4 as uuidv4 } from 'uuid'
-import { auth } from '@clerk/nextjs'
+import { getSession } from '@auth0/nextjs-auth0'
 import { validateFile, sanitizeFileName, getFileType } from '@/lib/fileValidation'
 import { logger } from '@/lib/logger'
 
@@ -13,13 +13,14 @@ const uri = process.env.MONGODB_URI as string
 
 export async function POST(request: Request) {
   try {
-    const { userId } = auth()
-    if (!userId) {
+    const session = await getSession()
+    if (!session?.user?.sub) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
+    const userId = session.user.sub
 
     logger.info('Starting file upload process', { userId })
 

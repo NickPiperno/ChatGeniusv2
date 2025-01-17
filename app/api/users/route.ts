@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs'
+import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
 const dynamodb = new DynamoDBService()
@@ -8,8 +8,8 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
   try {
-    const { userId } = auth();
-    if (!userId) {
+    const session = await getSession()
+    if (!session?.user?.sub) {
       return new NextResponse("Unauthorized", { status: 401 });
     }
 

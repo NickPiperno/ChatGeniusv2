@@ -76,7 +76,7 @@ This document outlines the DynamoDB table structures and naming conventions used
   - `id` (String)            # Unique identifier
   - `email` (String)         # User's email address
   - `displayName` (String)   # User's displayName
-  - `clerkId` (String)       # Clerk authentication ID
+  - `Auth0Id` (String)       # Auth0 authentication ID
   - `lastActiveAt` (Number)  # Last active timestamp
 - Optional Fields:
   - `imageUrl` (String)     # User's avatar URL

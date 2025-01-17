@@ -1,19 +1,20 @@
+import { getSession } from '@auth0/nextjs-auth0'
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
 const dynamoDb = new DynamoDBService()
 
 export async function POST(request: Request) {
   try {
-    const { userId } = auth()
-    if (!userId) {
+    const session = await getSession()
+    if (!session?.user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
 
+    const userId = session.user.sub
     const { displayName } = await request.json()
     if (!displayName) {
       return NextResponse.json(
