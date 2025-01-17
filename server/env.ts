@@ -40,7 +40,7 @@ const envSchema = z.object({
 
   // DynamoDB Tables
   DYNAMODB_MESSAGES_TABLE: z.string().default('dev_Messages'),
-  DYNAMODB_GROUPS_TABLE: z.string().default('dev_Groups'),
+  DYNAMODB_GROUP_CHATS_TABLE: z.string().default('dev_Groups'),
   DYNAMODB_USERS_TABLE: z.string().default('dev_Users'),
 
   // Auth0 Configuration

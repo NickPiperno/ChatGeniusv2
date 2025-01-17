@@ -26,7 +26,7 @@ const client = new DynamoDBClient({
 const dynamodb = DynamoDBDocumentClient.from(client);
 
 const TableNames = {
-  GroupChats: process.env.DYNAMODB_GROUPS_TABLE || 'dev_GroupChats',
+  GroupChats: process.env.DYNAMODB_GROUP_CHATS_TABLE || 'dev_GroupChats',
 };
 
 async function deleteChannel(id) {
