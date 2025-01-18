@@ -1916,11 +1916,11 @@ export class DynamoDBService {
         { name: TableNames.Users, envVar: process.env.DYNAMODB_USERS_TABLE }
       ];
 
-      // Log network configuration
-      const networkInfo = {
+      // Log initial connection attempt with full details
+      console.log('[DynamoDB] Starting connection test with full details:', {
         time: new Date().toISOString(),
         attempt: DynamoDBService.initializationState.attempts,
-        clientConfig: {
+        config: {
           region: this.clientConfig?.region,
           endpoint: process.env.AWS_ENDPOINT || `https://dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
           credentials: {
@@ -1937,24 +1937,22 @@ export class DynamoDBService {
           awsRegion: process.env.AWS_REGION,
           railwayServiceId: process.env.RAILWAY_SERVICE_ID,
           railwayProjectId: process.env.RAILWAY_PROJECT_ID,
-          hasEndpoint: !!process.env.AWS_ENDPOINT
-        },
-        dns: {
-          endpoint: `dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
-          isCustomEndpoint: !!process.env.AWS_ENDPOINT
+          hasEndpoint: !!process.env.AWS_ENDPOINT,
+          tables: tables.map(t => ({
+            name: t.name,
+            envVar: t.envVar,
+            exists: !!t.envVar
+          }))
         }
-      };
+      });
 
-      console.log('[DynamoDB] Connection test started with network info:', networkInfo);
-
-      // Test each critical table
+      // Test each critical table with more detailed error capture
       for (const table of tables) {
         const tableStartTime = Date.now();
         console.log(`[DynamoDB] Testing table ${table.name}:`, {
           time: new Date().toISOString(),
           tableName: table.name,
-          envVar: table.envVar,
-          endpoint: networkInfo.dns.endpoint
+          envVar: table.envVar
         });
 
         try {
@@ -1966,7 +1964,7 @@ export class DynamoDBService {
             time: new Date().toISOString(),
             command: 'DescribeTable',
             tableName: table.name,
-            endpoint: networkInfo.dns.endpoint
+            endpoint: `https://dynamodb.${process.env.AWS_REGION}.amazonaws.com`
           });
 
           const commandStartTime = Date.now();
@@ -1980,26 +1978,34 @@ export class DynamoDBService {
             itemCount: result.Table?.ItemCount,
             latencyMs: commandLatency,
             totalLatencyMs: Date.now() - tableStartTime,
-            region: this.clientConfig?.region,
-            endpoint: networkInfo.dns.endpoint
+            region: this.clientConfig?.region
           });
-        } catch (error) {
+        } catch (error: any) {
+          // Enhanced error logging
           const errorDetails = {
             time: new Date().toISOString(),
             tableName: table.name,
             error: error instanceof Error ? error.message : 'Unknown error',
             errorType: error instanceof Error ? error.constructor.name : typeof error,
-            errorCode: (error as any)?.name || 'Unknown',
-            statusCode: (error as any)?.statusCode,
+            errorCode: error?.name || 'Unknown',
+            statusCode: error?.statusCode,
             region: this.clientConfig?.region,
-            endpoint: networkInfo.dns.endpoint,
-            requestId: (error as any)?.requestId,
-            cfId: (error as any)?.cfId,
+            requestId: error?.requestId,
+            cfId: error?.cfId,
             networkError: error instanceof Error && error.message.includes('network'),
-            attempt: DynamoDBService.initializationState.attempts
+            attempt: DynamoDBService.initializationState.attempts,
+            // Add raw error properties for debugging
+            rawError: {
+              code: error?.code,
+              message: error?.message,
+              name: error?.name,
+              $metadata: error?.$metadata,
+              statusCode: error?.statusCode,
+              requestId: error?.requestId
+            }
           };
 
-          console.error(`[DynamoDB] Table ${table.name} check failed:`, errorDetails);
+          console.error(`[DynamoDB] Table ${table.name} check failed with details:`, errorDetails);
           return false;
         }
       }
@@ -2010,25 +2016,33 @@ export class DynamoDBService {
         totalLatencyMs: totalLatency,
         tablesChecked: tables.length,
         allTablesAccessible: true,
-        region: this.clientConfig?.region,
-        endpoint: networkInfo.dns.endpoint
+        region: this.clientConfig?.region
       });
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
+      // Enhanced error logging for unexpected errors
       const errorDetails = {
         time: new Date().toISOString(),
         error: error instanceof Error ? error.message : 'Unknown error',
         errorType: error instanceof Error ? error.constructor.name : typeof error,
-        errorCode: (error as any)?.name || 'Unknown',
-        statusCode: (error as any)?.statusCode,
+        errorCode: error?.code || error?.name || 'Unknown',
+        statusCode: error?.statusCode,
         stack: error instanceof Error ? error.stack : undefined,
         region: this.clientConfig?.region,
-        endpoint: `dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
+        requestId: error?.requestId,
+        cfId: error?.cfId,
         networkError: error instanceof Error && error.message.includes('network'),
-        requestId: (error as any)?.requestId,
-        cfId: (error as any)?.cfId,
         attempt: DynamoDBService.initializationState.attempts,
+        // Add raw error properties
+        rawError: {
+          code: error?.code,
+          message: error?.message,
+          name: error?.name,
+          $metadata: error?.$metadata,
+          statusCode: error?.statusCode,
+          requestId: error?.requestId
+        },
         clientState: {
           isInitialized: this.isInitialized,
           hasClient: !!this.dynamodb,
@@ -2037,7 +2051,7 @@ export class DynamoDBService {
         }
       };
 
-      console.error('[DynamoDB] Connection test failed:', errorDetails);
+      console.error('[DynamoDB] Connection test failed with full details:', errorDetails);
       return false;
     }
   }
