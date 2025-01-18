@@ -101,28 +101,79 @@ export class DynamoDBService {
       hasInstance: !!DynamoDBService.instance,
       isInitialized: DynamoDBService.instance?.isInitialized || false,
       hasInitPromise: !!DynamoDBService.instance?.initializationPromise,
-      state: DynamoDBService.initializationState
+      state: DynamoDBService.initializationState,
+      env: {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        region: process.env.AWS_REGION,
+        hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY
+      }
     });
 
     DynamoDBService.initializationState.startTime = new Date().toISOString();
     DynamoDBService.initializationState.isInProgress = true;
 
-    // Start initialization with timeout
-    this.initializationPromise = Promise.race<void>([
-      this.initializeClient(),
-      new Promise<void>((_, reject) => {
-        setTimeout(() => {
-          const error = new Error('DynamoDB initialization timed out after 10s');
-          console.error('[DynamoDB] Initialization timeout:', {
-            time: new Date().toISOString(),
-            startTime: DynamoDBService.initializationState.startTime,
-            attempts: DynamoDBService.initializationState.attempts,
-            errors: DynamoDBService.initializationState.errors
+    // Increase timeout to 30 seconds for Railway cold starts
+    const INIT_TIMEOUT_MS = 30000;
+
+    // Start initialization with timeout and early connection test
+    this.initializationPromise = (async () => {
+      try {
+        // Create client first
+        const client = new DynamoDBClient({
+          region: process.env.AWS_REGION,
+          credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
+          }
+        });
+
+        // Test basic connectivity before full initialization
+        console.log('[DynamoDB] Testing basic connectivity...', {
+          time: new Date().toISOString(),
+          region: process.env.AWS_REGION
+        });
+
+        try {
+          await client.send(new DescribeTableCommand({
+            TableName: process.env.DYNAMODB_GROUP_CHATS_TABLE
+          }));
+          console.log('[DynamoDB] Basic connectivity test passed');
+        } catch (error) {
+          console.error('[DynamoDB] Basic connectivity test failed:', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+            region: process.env.AWS_REGION
           });
-          reject(error);
-        }, 10000);
-      })
-    ]);
+        }
+
+        // Proceed with full initialization
+        return Promise.race([
+          this.initializeClient(),
+          new Promise<void>((_, reject) => {
+            setTimeout(() => {
+              const error = new Error(`DynamoDB initialization timed out after ${INIT_TIMEOUT_MS}ms`);
+              console.error('[DynamoDB] Initialization timeout:', {
+                time: new Date().toISOString(),
+                startTime: DynamoDBService.initializationState.startTime,
+                attempts: DynamoDBService.initializationState.attempts,
+                errors: DynamoDBService.initializationState.errors,
+                timeoutMs: INIT_TIMEOUT_MS
+              });
+              reject(error);
+            }, INIT_TIMEOUT_MS);
+          })
+        ]);
+      } catch (error) {
+        console.error('[DynamoDB] Early initialization failed:', {
+          time: new Date().toISOString(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+          errorType: error instanceof Error ? error.constructor.name : typeof error,
+          region: process.env.AWS_REGION
+        });
+        throw error;
+      }
+    })();
     
     // Add initialization status check with better error handling
     this.initializationPromise
@@ -179,8 +230,9 @@ export class DynamoDBService {
   private async initializeClient() {
     DynamoDBService.initializationState.attempts++;
     DynamoDBService.initializationState.lastAttempt = new Date().toISOString();
+    const startTime = Date.now();
 
-    console.log('[DynamoDB] InitializeClient called:', {
+    console.log('[DynamoDB] InitializeClient started:', {
       time: new Date().toISOString(),
       attempt: DynamoDBService.initializationState.attempts,
       state: DynamoDBService.initializationState,
@@ -188,65 +240,21 @@ export class DynamoDBService {
         nodeEnv: process.env.NODE_ENV,
         isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
         region: process.env.AWS_REGION,
-        hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY
+        endpoint: process.env.AWS_ENDPOINT,
+        hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY,
+        credentialsLength: {
+          accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+          secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+        },
+        tables: {
+          messages: process.env.DYNAMODB_MESSAGES_TABLE,
+          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          users: process.env.DYNAMODB_USERS_TABLE
+        }
       }
     });
 
-    const startTime = Date.now();
-    const networkInfo = {
-      nodeEnv: process.env.NODE_ENV,
-      isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-      railwayRegion: process.env.RAILWAY_REGION,
-      awsRegion: process.env.AWS_REGION,
-      railwayServiceId: process.env.RAILWAY_SERVICE_ID,
-      railwayProjectId: process.env.RAILWAY_PROJECT_ID
-    };
-
-    const tables = {
-      messages: process.env.DYNAMODB_MESSAGES_TABLE,
-      groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-      users: process.env.DYNAMODB_USERS_TABLE
-    };
-
-    const environment = {
-      hasRegion: !!process.env.AWS_REGION,
-      hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-      hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-      accessKeyLength: process.env.AWS_ACCESS_KEY_ID?.length,
-      secretKeyLength: process.env.AWS_SECRET_ACCESS_KEY?.length,
-      region: process.env.AWS_REGION
-    };
-
-    logger.info('[DynamoDB] InitializeClient called:', {
-      isInitialized: this.isInitialized,
-      hasDynamoDB: !!this.dynamodb,
-      hasInitializationPromise: !!this.initializationPromise,
-      networkInfo,
-      tables,
-      environment
-    });
-
-    // Only try to initialize once
-    if (this.isInitialized || this.dynamodb) {
-      logger.warn('[DynamoDB] Client already initialized, skipping initialization:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb,
-        initializationTime: Date.now() - startTime,
-        clientConfig: {
-          region: this.clientConfig?.region,
-          hasCredentials: !!this.clientConfig?.credentials
-        }
-      });
-      return;
-    }
-
     try {
-      logger.info('[DynamoDB] Starting service initialization...', {
-        networkInfo,
-        tables,
-        environment
-      });
-
       // Validate required credentials with detailed logging
       if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY || !process.env.AWS_REGION) {
         const missingCreds = {
@@ -255,10 +263,10 @@ export class DynamoDBService {
           region: !process.env.AWS_REGION
         };
         
-        logger.error('[DynamoDB] Missing required AWS credentials:', {
+        console.error('[DynamoDB] Missing required AWS credentials:', {
+          time: new Date().toISOString(),
           missing: missingCreds,
-          networkInfo,
-          environment
+          attempt: DynamoDBService.initializationState.attempts
         });
         
         throw new Error(`Missing AWS credentials: ${Object.entries(missingCreds)
@@ -270,27 +278,38 @@ export class DynamoDBService {
       // Store the client configuration
       this.clientConfig = {
         region: process.env.AWS_REGION,
+        ...(process.env.AWS_ENDPOINT && { endpoint: process.env.AWS_ENDPOINT }),
         credentials: {
           accessKeyId: process.env.AWS_ACCESS_KEY_ID,
           secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
         }
       };
 
-      logger.info('[DynamoDB] Creating DynamoDB client with config:', {
-        region: this.clientConfig.region,
-        hasCredentials: !!this.clientConfig.credentials,
-        credentialsLength: {
-          accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-          secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+      console.log('[DynamoDB] Creating DynamoDB client:', {
+        time: new Date().toISOString(),
+        config: {
+          region: this.clientConfig.region,
+          hasEndpoint: !!this.clientConfig.endpoint,
+          hasCredentials: !!this.clientConfig.credentials,
+          credentialsLength: {
+            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
+            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+          }
         },
-        networkInfo
+        attempt: DynamoDBService.initializationState.attempts,
+        duration: Date.now() - startTime
       });
 
       const client = new DynamoDBClient(this.clientConfig);
       this.dynamodb = DynamoDBDocumentClient.from(client);
       
       // Test the connection immediately with retries
-      logger.info('[DynamoDB] Testing connection...');
+      console.log('[DynamoDB] Testing connection...', {
+        time: new Date().toISOString(),
+        attempt: DynamoDBService.initializationState.attempts,
+        duration: Date.now() - startTime
+      });
+
       let isConnected = false;
       let retryCount = 0;
       const maxRetries = 3;
@@ -305,22 +324,26 @@ export class DynamoDBService {
           retryResults.push({
             attempt: retryCount + 1,
             success: isConnected,
-            duration: attemptDuration
+            duration: attemptDuration,
+            timestamp: new Date().toISOString()
           });
 
           if (!isConnected) {
             retryCount++;
             if (retryCount < maxRetries) {
-              logger.warn(`[DynamoDB] Connection test failed, retrying (${retryCount}/${maxRetries})...`, {
+              console.warn(`[DynamoDB] Connection test failed, retrying:`, {
+                time: new Date().toISOString(),
+                retryCount,
+                maxRetries,
                 attempts: retryResults,
-                networkInfo
+                nextRetryIn: 1000 * retryCount
               });
               await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
             }
           } else {
-            logger.info('[DynamoDB] Connection test succeeded:', {
+            console.log('[DynamoDB] Connection test succeeded:', {
+              time: new Date().toISOString(),
               attempts: retryResults,
-              networkInfo,
               totalDuration: Date.now() - startTime
             });
           }
@@ -330,15 +353,21 @@ export class DynamoDBService {
             attempt: retryCount,
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error',
-            duration: Date.now() - startTime
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+            duration: Date.now() - startTime,
+            timestamp: new Date().toISOString()
+          });
+
+          console.error(`[DynamoDB] Connection test error:`, {
+            time: new Date().toISOString(),
+            retryCount,
+            maxRetries,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+            attempts: retryResults
           });
 
           if (retryCount < maxRetries) {
-            logger.warn(`[DynamoDB] Connection test error, retrying (${retryCount}/${maxRetries}):`, {
-              error: error instanceof Error ? error.message : 'Unknown error',
-              attempts: retryResults,
-              networkInfo
-            });
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
           }
         }
@@ -349,24 +378,35 @@ export class DynamoDBService {
       }
 
       this.isInitialized = true;
-      logger.info('[DynamoDB] Service initialized and connected successfully');
+      console.log('[DynamoDB] Service initialized successfully:', {
+        time: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        attempts: retryResults,
+        state: {
+          isInitialized: this.isInitialized,
+          hasClient: !!this.dynamodb,
+          region: this.clientConfig.region
+        }
+      });
 
     } catch (error) {
       this.dynamodb = null;
       this.isInitialized = false;
       this.initializationPromise = null;
+      DynamoDBService.initializationState.isInProgress = false;
+      DynamoDBService.initializationState.errors.push(error instanceof Error ? error.message : 'Unknown error');
       
-      logger.error('[DynamoDB] Error during service initialization:', {
-        error,
-        message: error instanceof Error ? error.message : 'Unknown error',
+      console.error('[DynamoDB] Service initialization failed:', {
+        time: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
         stack: error instanceof Error ? error.stack : undefined,
+        state: DynamoDBService.initializationState,
         config: {
           region: this.clientConfig?.region,
-          hasCredentials: !!this.clientConfig?.credentials,
-          credentialsLength: {
-            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
-          }
+          hasEndpoint: !!this.clientConfig?.endpoint,
+          hasCredentials: !!this.clientConfig?.credentials
         }
       });
       
@@ -1876,98 +1916,117 @@ export class DynamoDBService {
         { name: TableNames.Users, envVar: process.env.DYNAMODB_USERS_TABLE }
       ];
 
-      logger.info('[DynamoDB] Starting connection test for critical tables:', {
-        tables: tables.map(t => ({
-          name: t.name,
-          envVar: t.envVar,
-          isConfigured: !!t.envVar
-        })),
-        aws: {
-          region: process.env.AWS_REGION,
-          hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY,
-          credentialsLength: {
-            accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
-            secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
+      // Log full connection details
+      console.log('[DynamoDB] Connection test started:', {
+        time: new Date().toISOString(),
+        attempt: DynamoDBService.initializationState.attempts,
+        clientConfig: {
+          region: this.clientConfig?.region,
+          endpoint: process.env.AWS_ENDPOINT,
+          credentials: {
+            hasAccessKey: !!this.clientConfig?.credentials?.accessKeyId,
+            hasSecretKey: !!this.clientConfig?.credentials?.secretAccessKey,
+            accessKeyLength: this.clientConfig?.credentials?.accessKeyId?.length,
+            secretKeyLength: this.clientConfig?.credentials?.secretAccessKey?.length
           }
         },
         environment: {
           nodeEnv: process.env.NODE_ENV,
           isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-          railwayRegion: process.env.RAILWAY_REGION
-        }
+          railwayRegion: process.env.RAILWAY_REGION,
+          awsRegion: process.env.AWS_REGION,
+          railwayServiceId: process.env.RAILWAY_SERVICE_ID,
+          railwayProjectId: process.env.RAILWAY_PROJECT_ID,
+          hasEndpoint: !!process.env.AWS_ENDPOINT
+        },
+        tables: tables.map(t => ({
+          name: t.name,
+          envVar: t.envVar,
+          isConfigured: !!t.envVar
+        }))
       });
 
       // Test each critical table
       for (const table of tables) {
         const tableStartTime = Date.now();
-        logger.info(`[DynamoDB] Testing connection to ${table.name}...`, {
+        console.log(`[DynamoDB] Testing table ${table.name}:`, {
+          time: new Date().toISOString(),
           tableName: table.name,
-          envVar: table.envVar,
-          timestamp: new Date().toISOString()
+          envVar: table.envVar
         });
 
         try {
-          const result = await this.dynamodb!.send(new DescribeTableCommand({
+          const describeCommand = new DescribeTableCommand({
             TableName: table.name
-          }));
+          });
+          
+          console.log(`[DynamoDB] Sending describe command for ${table.name}:`, {
+            time: new Date().toISOString(),
+            command: 'DescribeTable',
+            tableName: table.name
+          });
 
+          const result = await this.dynamodb!.send(describeCommand);
           const tableLatency = Date.now() - tableStartTime;
-          logger.info(`[DynamoDB] Successfully connected to ${table.name}:`, {
+
+          console.log(`[DynamoDB] Table ${table.name} check succeeded:`, {
+            time: new Date().toISOString(),
             tableName: table.name,
             status: result.Table?.TableStatus,
             itemCount: result.Table?.ItemCount,
-            sizeBytes: result.Table?.TableSizeBytes,
             latencyMs: tableLatency,
-            createdAt: result.Table?.CreationDateTime,
-            arn: result.Table?.TableArn,
-            throughput: {
-              read: result.Table?.ProvisionedThroughput?.ReadCapacityUnits,
-              write: result.Table?.ProvisionedThroughput?.WriteCapacityUnits
-            }
+            region: this.clientConfig?.region
           });
         } catch (error) {
-          logger.error(`[DynamoDB] Failed to connect to ${table.name}:`, {
+          const errorDetails = {
+            time: new Date().toISOString(),
             tableName: table.name,
             error: error instanceof Error ? error.message : 'Unknown error',
             errorType: error instanceof Error ? error.constructor.name : typeof error,
-            timestamp: new Date().toISOString(),
-            aws: {
-              region: process.env.AWS_REGION,
-              endpoint: process.env.AWS_ENDPOINT
-            }
-          });
+            errorCode: (error as any)?.name || 'Unknown',
+            statusCode: (error as any)?.statusCode,
+            region: this.clientConfig?.region,
+            requestId: (error as any)?.requestId,
+            cfId: (error as any)?.cfId,
+            attempt: DynamoDBService.initializationState.attempts
+          };
+
+          console.error(`[DynamoDB] Table ${table.name} check failed:`, errorDetails);
           return false;
         }
       }
 
       const totalLatency = Date.now() - startTime;
-      logger.info('[DynamoDB] All critical table connections successful:', {
+      console.log('[DynamoDB] Connection test completed successfully:', {
+        time: new Date().toISOString(),
         totalLatencyMs: totalLatency,
         tablesChecked: tables.length,
-        timestamp: new Date().toISOString(),
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        allTablesAccessible: true,
+        region: this.clientConfig?.region
       });
 
       return true;
     } catch (error) {
-      logger.error('[DynamoDB] Critical table connection test failed:', {
+      const errorDetails = {
+        time: new Date().toISOString(),
         error: error instanceof Error ? error.message : 'Unknown error',
         errorType: error instanceof Error ? error.constructor.name : typeof error,
+        errorCode: (error as any)?.name || 'Unknown',
+        statusCode: (error as any)?.statusCode,
         stack: error instanceof Error ? error.stack : undefined,
-        timestamp: new Date().toISOString(),
-        aws: {
-          region: process.env.AWS_REGION,
-          hasCredentials: !!process.env.AWS_ACCESS_KEY_ID
-        },
-        tables: [
-          TableNames.Messages,
-          TableNames.GroupChats,
-          TableNames.Users
-        ].map(name => ({
-          name,
-          envVar: process.env[`DYNAMODB_${name.toUpperCase()}_TABLE`]
-        }))
-      });
+        region: this.clientConfig?.region,
+        requestId: (error as any)?.requestId,
+        cfId: (error as any)?.cfId,
+        attempt: DynamoDBService.initializationState.attempts,
+        clientState: {
+          isInitialized: this.isInitialized,
+          hasClient: !!this.dynamodb,
+          hasConfig: !!this.clientConfig,
+          configRegion: this.clientConfig?.region
+        }
+      };
+
+      console.error('[DynamoDB] Connection test failed:', errorDetails);
       return false;
     }
   }
