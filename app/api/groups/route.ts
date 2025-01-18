@@ -12,126 +12,88 @@ const dynamoDb = DynamoDBService.getInstance()
 export const runtime = 'nodejs'
 
 export async function GET() {
+  const startTime = Date.now();
+  console.log('[API] Groups GET request started:', {
+    time: new Date().toISOString(),
+    hasDb: !!dynamoDb,
+    dbState: dynamoDb ? {
+      isInitialized: dynamoDb.isInitialized,
+      hasClient: !!(dynamoDb as any)?.dynamodb,
+      hasInitPromise: !!(dynamoDb as any)?.initializationPromise
+    } : 'no db instance'
+  });
+
   try {
-    logger.info('[GROUPS_GET] Starting groups fetch request');
-    
-    // Check DynamoDB initialization
+    // Check DynamoDB initialization with detailed logging
     if (!dynamoDb.isInitialized) {
-      logger.error('[GROUPS_GET] DynamoDB service not initialized:', {
-        hasRegion: !!process.env.AWS_REGION,
-        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        region: process.env.AWS_REGION,
-        groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        railwayRegion: process.env.RAILWAY_REGION,
-        railwayService: process.env.RAILWAY_SERVICE_NAME,
-        railwayProject: process.env.RAILWAY_PROJECT_NAME
-      })
+      const error = {
+        time: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        state: dynamoDb ? 'exists but not initialized' : 'null instance',
+        env: {
+          nodeEnv: process.env.NODE_ENV,
+          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+          region: process.env.AWS_REGION,
+          hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY
+        }
+      };
+      console.error('[API] DynamoDB not initialized:', error);
       return NextResponse.json({ 
         error: 'Database service unavailable',
-        details: 'Please check AWS credentials and configuration',
-        env: {
-          hasRegion: !!process.env.AWS_REGION,
-          hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-          hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-          hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
-          region: process.env.AWS_REGION,
-          railwayRegion: process.env.RAILWAY_REGION
-        }
-      }, { status: 503 })
+        details: 'Service not initialized',
+        debug: error
+      }, { status: 503 });
     }
 
-    const session = await getSession()
+    const session = await getSession();
     if (!session?.user?.sub) {
-      logger.warn('[GROUPS_GET] Unauthorized groups fetch attempt - no user ID')
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+      console.warn('[API] Unauthorized groups fetch attempt - no user ID:', {
+        time: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        session: session ? 'exists but no user' : 'no session'
+      });
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
-    const userId = session.user.sub
+    const userId = session.user.sub;
 
-    logger.info('[GROUPS_GET] Fetching groups for user', { 
+    console.log('[API] Fetching groups for user:', {
+      time: new Date().toISOString(),
       userId,
-      groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
-    })
-    
-    // Handle case where groups table is not configured
-    if (!process.env.DYNAMODB_GROUP_CHATS_TABLE) {
-      logger.warn('[GROUPS_GET] Groups table not configured')
-      return NextResponse.json({
-        count: 0,
-        groups: [],
-        warning: 'Groups table not configured'
-      })
-    }
+      duration: Date.now() - startTime
+    });
 
-    // Verify tables before proceeding
-    try {
-      logger.info('[GROUPS_GET] Verifying DynamoDB tables...')
-      await dynamoDb.verifyTables()
-      logger.info('[GROUPS_GET] Tables verified successfully')
-    } catch (error) {
-      logger.error('[GROUPS_GET] Table verification failed:', {
-        error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      })
-      return NextResponse.json({ 
-        error: 'Database tables not accessible',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }, { status: 503 })
-    }
-
-    const groups = await dynamoDb.getGroupsByUserId(userId)
+    const groups = await dynamoDb.getGroupsByUserId(userId);
     
-    logger.info('[GROUPS_GET] Groups fetched successfully:', {
+    console.log('[API] Groups fetched successfully:', {
+      time: new Date().toISOString(),
+      userId,
       count: groups.length,
+      duration: Date.now() - startTime,
       groups: groups.map(g => ({
         id: g.id,
         name: g.name,
         members: g.members?.length
       }))
-    })
+    });
 
     return NextResponse.json({
       count: groups.length,
       groups
-    })
+    });
   } catch (error) {
-    logger.error('[GROUPS_GET] Error:', {
-      error,
-      message: error instanceof Error ? error.message : 'Unknown error',
+    console.error('[API] Error in groups fetch:', {
+      time: new Date().toISOString(),
+      duration: Date.now() - startTime,
+      error: error instanceof Error ? error.message : 'Unknown error',
       stack: error instanceof Error ? error.stack : undefined,
-      type: error instanceof Error ? error.constructor.name : typeof error,
-      env: {
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        region: process.env.AWS_REGION,
-        hasAuth0Secret: !!process.env.AUTH0_SECRET,
-        hasAuth0BaseUrl: !!process.env.AUTH0_BASE_URL,
-        hasAuth0IssuerBaseUrl: !!process.env.AUTH0_ISSUER_BASE_URL,
-        hasAuth0ClientId: !!process.env.AUTH0_CLIENT_ID,
-        hasAuth0ClientSecret: !!process.env.AUTH0_CLIENT_SECRET,
-        hasAwsAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
-        hasAwsSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-        hasAwsRegion: !!process.env.AWS_REGION,
-        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
-        groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
-      }
-    })
+      type: error instanceof Error ? error.constructor.name : typeof error
+    });
     
     return NextResponse.json({
-      error: 'Database operation failed',
+      error: 'Failed to fetch groups',
       details: error instanceof Error ? error.message : 'Unknown error',
-      type: error instanceof Error ? error.constructor.name : typeof error,
-      env: {
-        hasRegion: !!process.env.AWS_REGION,
-        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-        hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
-      }
-    }, { status: 500 })
+      type: error instanceof Error ? error.constructor.name : typeof error
+    }, { status: 500 });
   }
 }
 

@@ -85,63 +85,91 @@ export class DynamoDBService {
   public isInitialized = false;
   private initializationPromise: Promise<void> | null = null;
 
+  // Add initialization state tracking
+  private static initializationState = {
+    attempts: 0,
+    lastAttempt: null as string | null,
+    errors: [] as string[],
+    isInProgress: false,
+    startTime: null as string | null
+  };
+
   private constructor() {
-    logger.info('[DynamoDB] Constructor called:', {
+    // Add immediate console logging
+    console.log('[DynamoDB] Constructor called:', {
+      time: new Date().toISOString(),
       hasInstance: !!DynamoDBService.instance,
       isInitialized: DynamoDBService.instance?.isInitialized || false,
-      hasInitializationPromise: !!DynamoDBService.instance?.initializationPromise,
-      environment: {
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        railwayRegion: process.env.RAILWAY_REGION,
-        awsRegion: process.env.AWS_REGION,
-        tables: {
-          messages: process.env.DYNAMODB_MESSAGES_TABLE,
-          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-          users: process.env.DYNAMODB_USERS_TABLE
-        }
-      }
+      hasInitPromise: !!DynamoDBService.instance?.initializationPromise,
+      state: DynamoDBService.initializationState
     });
+
+    DynamoDBService.initializationState.startTime = new Date().toISOString();
+    DynamoDBService.initializationState.isInProgress = true;
 
     // Start initialization with timeout
     this.initializationPromise = Promise.race<void>([
       this.initializeClient(),
-      new Promise<void>((_, reject) => 
-        setTimeout(() => reject(new Error('DynamoDB initialization timed out after 10s')), 10000)
-      )
+      new Promise<void>((_, reject) => {
+        setTimeout(() => {
+          const error = new Error('DynamoDB initialization timed out after 10s');
+          console.error('[DynamoDB] Initialization timeout:', {
+            time: new Date().toISOString(),
+            startTime: DynamoDBService.initializationState.startTime,
+            attempts: DynamoDBService.initializationState.attempts,
+            errors: DynamoDBService.initializationState.errors
+          });
+          reject(error);
+        }, 10000);
+      })
     ]);
     
     // Add initialization status check with better error handling
     this.initializationPromise
       .then(() => {
-        logger.info('[DynamoDB] Initialization completed successfully:', {
+        console.log('[DynamoDB] Initialization completed successfully:', {
+          time: new Date().toISOString(),
+          duration: new Date().getTime() - new Date(DynamoDBService.initializationState.startTime!).getTime(),
           isInitialized: this.isInitialized,
           hasClient: !!this.dynamodb,
-          config: {
-            region: this.clientConfig?.region,
-            hasCredentials: !!this.clientConfig?.credentials
-          }
+          attempts: DynamoDBService.initializationState.attempts,
+          state: DynamoDBService.initializationState
         });
       })
       .catch((error) => {
         this.isInitialized = false;
         this.dynamodb = null;
         this.initializationPromise = null;
+        DynamoDBService.initializationState.isInProgress = false;
+        DynamoDBService.initializationState.errors.push(error instanceof Error ? error.message : 'Unknown error');
         
-        logger.error('[DynamoDB] Initialization failed:', {
+        console.error('[DynamoDB] Initialization failed:', {
+          time: new Date().toISOString(),
           error: error instanceof Error ? error.message : 'Unknown error',
           stack: error instanceof Error ? error.stack : undefined,
+          state: DynamoDBService.initializationState,
           environment: {
             nodeEnv: process.env.NODE_ENV,
             isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
             railwayRegion: process.env.RAILWAY_REGION,
-            awsRegion: process.env.AWS_REGION
+            awsRegion: process.env.AWS_REGION,
+            hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY
           }
         });
       });
   }
 
   public static getInstance(): DynamoDBService {
+    console.log('[DynamoDB] GetInstance called:', {
+      time: new Date().toISOString(),
+      hasInstance: !!DynamoDBService.instance,
+      state: DynamoDBService.instance ? {
+        isInitialized: DynamoDBService.instance.isInitialized,
+        hasClient: !!DynamoDBService.instance.dynamodb,
+        hasInitPromise: !!DynamoDBService.instance.initializationPromise
+      } : 'no instance'
+    });
+
     if (!DynamoDBService.instance) {
       DynamoDBService.instance = new DynamoDBService();
     }
@@ -149,6 +177,21 @@ export class DynamoDBService {
   }
 
   private async initializeClient() {
+    DynamoDBService.initializationState.attempts++;
+    DynamoDBService.initializationState.lastAttempt = new Date().toISOString();
+
+    console.log('[DynamoDB] InitializeClient called:', {
+      time: new Date().toISOString(),
+      attempt: DynamoDBService.initializationState.attempts,
+      state: DynamoDBService.initializationState,
+      env: {
+        nodeEnv: process.env.NODE_ENV,
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+        region: process.env.AWS_REGION,
+        hasCredentials: !!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY
+      }
+    });
+
     const startTime = Date.now();
     const networkInfo = {
       nodeEnv: process.env.NODE_ENV,
@@ -332,10 +375,12 @@ export class DynamoDBService {
   }
 
   private async ensureInitialized() {
-    logger.info('[DynamoDB] EnsureInitialized called:', {
+    console.log('[DynamoDB] EnsureInitialized called:', {
+      time: new Date().toISOString(),
       isInitialized: this.isInitialized,
-      hasDynamoDB: !!this.dynamodb,
-      hasInitializationPromise: !!this.initializationPromise
+      hasClient: !!this.dynamodb,
+      hasInitPromise: !!this.initializationPromise,
+      state: DynamoDBService.initializationState
     });
 
     // If already initialized, return immediately
