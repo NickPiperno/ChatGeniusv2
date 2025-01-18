@@ -1,5 +1,5 @@
 import { 
-  DynamoDBClient,
+  DynamoDBClient, 
   DescribeTableCommand,
   ResourceNotFoundException
 } from '@aws-sdk/client-dynamodb'
@@ -121,8 +121,8 @@ export class DynamoDBService {
       try {
         // Create client first
         const client = new DynamoDBClient({
-          region: process.env.AWS_REGION,
-          credentials: {
+      region: process.env.AWS_REGION,
+      credentials: {
             accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
             secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
           }
@@ -898,24 +898,24 @@ export class DynamoDBService {
 
     try {
       await this.dynamodb!.send(new PutCommand({
-        TableName: TableNames.GroupChats,
-        Item: {
-          id: groupChat.id,
-          name: groupChat.name,
-          userId: groupChat.userId,
-          members: groupChat.members,
-          createdAt: groupChat.createdAt,
-          updatedAt: groupChat.updatedAt,
-          metadata: groupChat.metadata || {}
-        }
-      }))
+      TableName: TableNames.GroupChats,
+      Item: {
+        id: groupChat.id,
+        name: groupChat.name,
+        userId: groupChat.userId,
+        members: groupChat.members,
+        createdAt: groupChat.createdAt,
+        updatedAt: groupChat.updatedAt,
+        metadata: groupChat.metadata || {}
+      }
+    }))
 
       logger.info('[DynamoDB] Group chat created successfully:', {
         id: groupChat.id,
         name: groupChat.name
       })
 
-      return groupChat
+    return groupChat
     } catch (error) {
       logger.error('[DynamoDB] Error creating group chat:', {
         error,
@@ -1916,13 +1916,13 @@ export class DynamoDBService {
         { name: TableNames.Users, envVar: process.env.DYNAMODB_USERS_TABLE }
       ];
 
-      // Log full connection details
-      console.log('[DynamoDB] Connection test started:', {
+      // Log network configuration
+      const networkInfo = {
         time: new Date().toISOString(),
         attempt: DynamoDBService.initializationState.attempts,
         clientConfig: {
           region: this.clientConfig?.region,
-          endpoint: process.env.AWS_ENDPOINT,
+          endpoint: process.env.AWS_ENDPOINT || `https://dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
           credentials: {
             hasAccessKey: !!this.clientConfig?.credentials?.accessKeyId,
             hasSecretKey: !!this.clientConfig?.credentials?.secretAccessKey,
@@ -1939,12 +1939,13 @@ export class DynamoDBService {
           railwayProjectId: process.env.RAILWAY_PROJECT_ID,
           hasEndpoint: !!process.env.AWS_ENDPOINT
         },
-        tables: tables.map(t => ({
-          name: t.name,
-          envVar: t.envVar,
-          isConfigured: !!t.envVar
-        }))
-      });
+        dns: {
+          endpoint: `dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
+          isCustomEndpoint: !!process.env.AWS_ENDPOINT
+        }
+      };
+
+      console.log('[DynamoDB] Connection test started with network info:', networkInfo);
 
       // Test each critical table
       for (const table of tables) {
@@ -1952,7 +1953,8 @@ export class DynamoDBService {
         console.log(`[DynamoDB] Testing table ${table.name}:`, {
           time: new Date().toISOString(),
           tableName: table.name,
-          envVar: table.envVar
+          envVar: table.envVar,
+          endpoint: networkInfo.dns.endpoint
         });
 
         try {
@@ -1963,19 +1965,23 @@ export class DynamoDBService {
           console.log(`[DynamoDB] Sending describe command for ${table.name}:`, {
             time: new Date().toISOString(),
             command: 'DescribeTable',
-            tableName: table.name
+            tableName: table.name,
+            endpoint: networkInfo.dns.endpoint
           });
 
+          const commandStartTime = Date.now();
           const result = await this.dynamodb!.send(describeCommand);
-          const tableLatency = Date.now() - tableStartTime;
+          const commandLatency = Date.now() - commandStartTime;
 
           console.log(`[DynamoDB] Table ${table.name} check succeeded:`, {
             time: new Date().toISOString(),
             tableName: table.name,
             status: result.Table?.TableStatus,
             itemCount: result.Table?.ItemCount,
-            latencyMs: tableLatency,
-            region: this.clientConfig?.region
+            latencyMs: commandLatency,
+            totalLatencyMs: Date.now() - tableStartTime,
+            region: this.clientConfig?.region,
+            endpoint: networkInfo.dns.endpoint
           });
         } catch (error) {
           const errorDetails = {
@@ -1986,8 +1992,10 @@ export class DynamoDBService {
             errorCode: (error as any)?.name || 'Unknown',
             statusCode: (error as any)?.statusCode,
             region: this.clientConfig?.region,
+            endpoint: networkInfo.dns.endpoint,
             requestId: (error as any)?.requestId,
             cfId: (error as any)?.cfId,
+            networkError: error instanceof Error && error.message.includes('network'),
             attempt: DynamoDBService.initializationState.attempts
           };
 
@@ -2002,7 +2010,8 @@ export class DynamoDBService {
         totalLatencyMs: totalLatency,
         tablesChecked: tables.length,
         allTablesAccessible: true,
-        region: this.clientConfig?.region
+        region: this.clientConfig?.region,
+        endpoint: networkInfo.dns.endpoint
       });
 
       return true;
@@ -2015,6 +2024,8 @@ export class DynamoDBService {
         statusCode: (error as any)?.statusCode,
         stack: error instanceof Error ? error.stack : undefined,
         region: this.clientConfig?.region,
+        endpoint: `dynamodb.${process.env.AWS_REGION}.amazonaws.com`,
+        networkError: error instanceof Error && error.message.includes('network'),
         requestId: (error as any)?.requestId,
         cfId: (error as any)?.cfId,
         attempt: DynamoDBService.initializationState.attempts,
