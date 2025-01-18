@@ -103,10 +103,15 @@ export class DynamoDBService {
       }
     });
 
-    // Start initialization immediately
-    this.initializationPromise = this.initializeClient();
+    // Start initialization with timeout
+    this.initializationPromise = Promise.race<void>([
+      this.initializeClient(),
+      new Promise<void>((_, reject) => 
+        setTimeout(() => reject(new Error('DynamoDB initialization timed out after 10s')), 10000)
+      )
+    ]);
     
-    // Add initialization status check
+    // Add initialization status check with better error handling
     this.initializationPromise
       .then(() => {
         logger.info('[DynamoDB] Initialization completed successfully:', {
@@ -119,6 +124,10 @@ export class DynamoDBService {
         });
       })
       .catch((error) => {
+        this.isInitialized = false;
+        this.dynamodb = null;
+        this.initializationPromise = null;
+        
         logger.error('[DynamoDB] Initialization failed:', {
           error: error instanceof Error ? error.message : 'Unknown error',
           stack: error instanceof Error ? error.stack : undefined,
@@ -141,21 +150,37 @@ export class DynamoDBService {
 
   private async initializeClient() {
     const startTime = Date.now();
+    const networkInfo = {
+      nodeEnv: process.env.NODE_ENV,
+      isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
+      railwayRegion: process.env.RAILWAY_REGION,
+      awsRegion: process.env.AWS_REGION,
+      railwayServiceId: process.env.RAILWAY_SERVICE_ID,
+      railwayProjectId: process.env.RAILWAY_PROJECT_ID
+    };
+
+    const tables = {
+      messages: process.env.DYNAMODB_MESSAGES_TABLE,
+      groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+      users: process.env.DYNAMODB_USERS_TABLE
+    };
+
+    const environment = {
+      hasRegion: !!process.env.AWS_REGION,
+      hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+      hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+      accessKeyLength: process.env.AWS_ACCESS_KEY_ID?.length,
+      secretKeyLength: process.env.AWS_SECRET_ACCESS_KEY?.length,
+      region: process.env.AWS_REGION
+    };
+
     logger.info('[DynamoDB] InitializeClient called:', {
       isInitialized: this.isInitialized,
       hasDynamoDB: !!this.dynamodb,
       hasInitializationPromise: !!this.initializationPromise,
-      environment: {
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        railwayRegion: process.env.RAILWAY_REGION,
-        awsRegion: process.env.AWS_REGION,
-        tables: {
-          messages: process.env.DYNAMODB_MESSAGES_TABLE,
-          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-          users: process.env.DYNAMODB_USERS_TABLE
-        }
-      }
+      networkInfo,
+      tables,
+      environment
     });
 
     // Only try to initialize once
@@ -174,16 +199,9 @@ export class DynamoDBService {
 
     try {
       logger.info('[DynamoDB] Starting service initialization...', {
-        nodeEnv: process.env.NODE_ENV,
-        isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-        region: process.env.AWS_REGION,
-        hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-        hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-        tables: {
-          messages: process.env.DYNAMODB_MESSAGES_TABLE,
-          groups: process.env.DYNAMODB_GROUP_CHATS_TABLE,
-          users: process.env.DYNAMODB_USERS_TABLE
-        }
+        networkInfo,
+        tables,
+        environment
       });
 
       // Validate required credentials with detailed logging
@@ -196,8 +214,8 @@ export class DynamoDBService {
         
         logger.error('[DynamoDB] Missing required AWS credentials:', {
           missing: missingCreds,
-          nodeEnv: process.env.NODE_ENV,
-          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME
+          networkInfo,
+          environment
         });
         
         throw new Error(`Missing AWS credentials: ${Object.entries(missingCreds)
@@ -221,7 +239,8 @@ export class DynamoDBService {
         credentialsLength: {
           accessKey: process.env.AWS_ACCESS_KEY_ID?.length || 0,
           secretKey: process.env.AWS_SECRET_ACCESS_KEY?.length || 0
-        }
+        },
+        networkInfo
       });
 
       const client = new DynamoDBClient(this.clientConfig);
@@ -232,26 +251,52 @@ export class DynamoDBService {
       let isConnected = false;
       let retryCount = 0;
       const maxRetries = 3;
+      const retryResults = [];
       
       while (!isConnected && retryCount < maxRetries) {
         try {
+          const attemptStartTime = Date.now();
           isConnected = await this.testConnection();
+          const attemptDuration = Date.now() - attemptStartTime;
+          
+          retryResults.push({
+            attempt: retryCount + 1,
+            success: isConnected,
+            duration: attemptDuration
+          });
+
           if (!isConnected) {
             retryCount++;
             if (retryCount < maxRetries) {
-              logger.warn(`[DynamoDB] Connection test failed, retrying (${retryCount}/${maxRetries})...`);
+              logger.warn(`[DynamoDB] Connection test failed, retrying (${retryCount}/${maxRetries})...`, {
+                attempts: retryResults,
+                networkInfo
+              });
               await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
             }
+          } else {
+            logger.info('[DynamoDB] Connection test succeeded:', {
+              attempts: retryResults,
+              networkInfo,
+              totalDuration: Date.now() - startTime
+            });
           }
         } catch (error) {
           retryCount++;
+          retryResults.push({
+            attempt: retryCount,
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            duration: Date.now() - startTime
+          });
+
           if (retryCount < maxRetries) {
             logger.warn(`[DynamoDB] Connection test error, retrying (${retryCount}/${maxRetries}):`, {
-              error: error instanceof Error ? error.message : 'Unknown error'
+              error: error instanceof Error ? error.message : 'Unknown error',
+              attempts: retryResults,
+              networkInfo
             });
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-          } else {
-            throw error;
           }
         }
       }
@@ -290,48 +335,60 @@ export class DynamoDBService {
     logger.info('[DynamoDB] EnsureInitialized called:', {
       isInitialized: this.isInitialized,
       hasDynamoDB: !!this.dynamodb,
-      hasInitializationPromise: !!this.initializationPromise,
-      clientConfig: this.clientConfig ? {
-        region: this.clientConfig.region,
-        hasCredentials: !!this.clientConfig.credentials
-      } : 'No config'
+      hasInitializationPromise: !!this.initializationPromise
     });
 
-    // Wait for any ongoing initialization
-    if (this.initializationPromise) {
-      logger.info('[DynamoDB] Waiting for ongoing initialization...');
-      await this.initializationPromise;
-      logger.info('[DynamoDB] Initialization completed:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb
-      });
+    // If already initialized, return immediately
+    if (this.isInitialized && this.dynamodb) {
+      return;
     }
 
-    // If not initialized and no initialization in progress, start one
-    if (!this.isInitialized && !this.initializationPromise) {
+    // If initialization is in progress, wait for it with timeout
+    if (this.initializationPromise) {
+      try {
+        await Promise.race<void>([
+          this.initializationPromise,
+          new Promise<void>((_, reject) => 
+            setTimeout(() => reject(new Error('Waiting for initialization timed out after 5s')), 5000)
+          )
+        ]);
+      } catch (error) {
+        // Clear failed initialization
+        this.isInitialized = false;
+        this.dynamodb = null;
+        this.initializationPromise = null;
+        
+        logger.error('[DynamoDB] Initialization wait failed:', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        });
+        throw error;
+      }
+    }
+
+    // If not initialized and no initialization in progress, start new one
+    if (!this.isInitialized) {
       logger.info('[DynamoDB] Starting new initialization...');
-      this.initializationPromise = this.initializeClient();
-      await this.initializationPromise;
-      logger.info('[DynamoDB] New initialization completed:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb
-      });
+      this.initializationPromise = Promise.race<void>([
+        this.initializeClient(),
+        new Promise<void>((_, reject) => 
+          setTimeout(() => reject(new Error('New initialization timed out after 10s')), 10000)
+        )
+      ]);
+      
+      try {
+        await this.initializationPromise;
+      } catch (error) {
+        logger.error('[DynamoDB] New initialization failed:', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        });
+        throw error;
+      }
     }
 
     if (!this.isInitialized || !this.dynamodb) {
-      logger.error('[DynamoDB] Service not initialized after initialization attempt:', {
-        isInitialized: this.isInitialized,
-        hasDynamoDB: !!this.dynamodb,
-        hasConfig: !!this.clientConfig,
-        env: {
-          nodeEnv: process.env.NODE_ENV,
-          isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
-          hasRegion: !!process.env.AWS_REGION,
-          hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-          hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY
-        }
-      });
-      throw new Error('DynamoDB service is not initialized. Check AWS credentials and configuration.');
+      throw new Error('DynamoDB service failed to initialize after attempts');
     }
   }
 
