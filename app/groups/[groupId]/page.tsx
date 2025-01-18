@@ -15,7 +15,7 @@ interface GroupPageProps {
 
 export async function generateMetadata({ params }: GroupPageProps): Promise<Metadata> {
   const { groupId } = params
-  const dynamoDb = new DynamoDBService()
+  const dynamoDb = DynamoDBService.getInstance()
   
   try {
     const group = await dynamoDb.getGroupById(groupId)
@@ -36,7 +36,7 @@ export default async function GroupPage({ params }: { params: { groupId: string 
   if (!session?.user) redirect('/api/auth/login')
   const userId = session.user.sub
 
-  const dynamoDb = new DynamoDBService()
+  const dynamoDb = DynamoDBService.getInstance()
   
   try {
     logger.info('Fetching group:', { groupId: params.groupId, userId })

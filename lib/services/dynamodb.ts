@@ -78,21 +78,18 @@ export function convertToMessage(item: DynamoDBMessage): Message {
   }
 }
 
-// Singleton instance
-let instance: DynamoDBService | null = null;
-
 export class DynamoDBService {
-  private static instance: DynamoDBService;
+  private static instance: DynamoDBService | null = null;
   private dynamodb: DynamoDBDocumentClient | null = null;
   private clientConfig: any;
   public isInitialized = false;
   private initializationPromise: Promise<void> | null = null;
 
-  constructor() {
+  private constructor() {
     logger.info('[DynamoDB] Constructor called:', {
-      hasInstance: !!instance,
-      isInitialized: instance?.isInitialized || false,
-      hasInitializationPromise: !!instance?.initializationPromise,
+      hasInstance: !!DynamoDBService.instance,
+      isInitialized: DynamoDBService.instance?.isInitialized || false,
+      hasInitializationPromise: !!DynamoDBService.instance?.initializationPromise,
       environment: {
         nodeEnv: process.env.NODE_ENV,
         isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
@@ -106,15 +103,6 @@ export class DynamoDBService {
       }
     });
 
-    if (instance) {
-      logger.info('[DynamoDB] Returning existing instance:', {
-        isInitialized: instance.isInitialized,
-        hasClient: !!instance.dynamodb
-      });
-      return instance;
-    }
-
-    instance = this;
     // Start initialization immediately
     this.initializationPromise = this.initializeClient();
     
@@ -142,6 +130,13 @@ export class DynamoDBService {
           }
         });
       });
+  }
+
+  public static getInstance(): DynamoDBService {
+    if (!DynamoDBService.instance) {
+      DynamoDBService.instance = new DynamoDBService();
+    }
+    return DynamoDBService.instance;
   }
 
   private async initializeClient() {

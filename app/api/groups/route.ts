@@ -1,4 +1,3 @@
-
 import { getSession } from '@auth0/nextjs-auth0'
 import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
@@ -7,8 +6,8 @@ import crypto from 'crypto'
 import { GroupChat } from '@/types/models/dynamodb'
 import { User } from '@/types/models/user'
 
-// Initialize DynamoDB service
-const dynamoDb = new DynamoDBService()
+// Initialize DynamoDB service using singleton pattern
+const dynamoDb = DynamoDBService.getInstance()
 
 export const runtime = 'nodejs'
 
@@ -26,7 +25,10 @@ export async function GET() {
         nodeEnv: process.env.NODE_ENV,
         isRailway: !!process.env.RAILWAY_ENVIRONMENT_NAME,
         region: process.env.AWS_REGION,
-        groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE
+        groupsTable: process.env.DYNAMODB_GROUP_CHATS_TABLE,
+        railwayRegion: process.env.RAILWAY_REGION,
+        railwayService: process.env.RAILWAY_SERVICE_NAME,
+        railwayProject: process.env.RAILWAY_PROJECT_NAME
       })
       return NextResponse.json({ 
         error: 'Database service unavailable',
@@ -35,7 +37,9 @@ export async function GET() {
           hasRegion: !!process.env.AWS_REGION,
           hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
           hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-          hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE
+          hasGroupsTable: !!process.env.DYNAMODB_GROUP_CHATS_TABLE,
+          region: process.env.AWS_REGION,
+          railwayRegion: process.env.RAILWAY_REGION
         }
       }, { status: 503 })
     }

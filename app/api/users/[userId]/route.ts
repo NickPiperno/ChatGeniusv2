@@ -13,7 +13,7 @@ const auth0 = new ManagementClient({
   clientSecret: process.env.AUTH0_CLIENT_SECRET!,
 })
 
-const dynamoDb = new DynamoDBService()
+const dynamoDb = DynamoDBService.getInstance()
 
 export async function GET(
   req: Request,

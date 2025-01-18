@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamodb = new DynamoDBService()
+const dynamodb = DynamoDBService.getInstance()
 
 export const dynamic = 'force-dynamic'
 

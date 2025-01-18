@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamoDb = new DynamoDBService()
+// Initialize DynamoDB service using singleton pattern
+const dynamoDb = DynamoDBService.getInstance()
 
 export async function GET(
   req: Request,

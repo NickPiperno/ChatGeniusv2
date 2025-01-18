@@ -51,7 +51,7 @@ describe('DynamoDBService', () => {
   let mockSend: jest.SpyInstance
 
   beforeEach(() => {
-    service = new DynamoDBService()
+    service = DynamoDBService.getInstance()
     dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}))
     mockSend = jest.spyOn(dynamodb, 'send')
     
@@ -90,10 +90,19 @@ describe('DynamoDBService', () => {
     }
 
     mockUser = {
-      id: 'test-user',
+      id: 'test-user-id',
       email: 'test@example.com',
       displayName: 'Test User',
-      metadata: {}
+      auth0Id: 'auth0|test123',
+      imageUrl: 'https://example.com/avatar.jpg',
+      lastActiveAt: Date.now(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        preferences: {
+          theme: 'dark'
+        }
+      }
     }
   })
 

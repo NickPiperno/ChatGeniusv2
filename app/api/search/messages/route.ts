@@ -5,7 +5,7 @@ import { SearchParams, SearchResponse } from '@/types/search'
 import { DynamoDBMessage } from '@/types/models/dynamodb'
 
 console.log('[Search API] Initializing DynamoDB service...')
-const dynamoDb = new DynamoDBService()
+const dynamoDb = DynamoDBService.getInstance()
 console.log('[Search API] DynamoDB service initialized')
 
 export async function GET(request: NextRequest) {

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@auth0/nextjs-auth0'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamoDb = new DynamoDBService()
+// Initialize DynamoDB service using singleton pattern
+const dynamoDb = DynamoDBService.getInstance()
 
 // GET /api/groups/[groupId]/messages
 export async function GET(

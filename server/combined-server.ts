@@ -25,7 +25,7 @@ const app = next({ dev, hostname, port })
 const handle = app.getRequestHandler()
 
 // Initialize DynamoDB service
-const dynamoDb = new DynamoDBService()
+const dynamoDb = DynamoDBService.getInstance()
 
 export async function createCombinedServer() {
   await app.prepare()

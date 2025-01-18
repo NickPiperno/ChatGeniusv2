@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { DynamoDBService } from '@/lib/services/dynamodb'
 
-const dynamoDb = new DynamoDBService()
+const dynamoDb = DynamoDBService.getInstance()
 
 export const runtime = 'nodejs'
 

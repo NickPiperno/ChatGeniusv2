@@ -7,7 +7,7 @@ import type { NextRequest } from 'next/server'
 // Initialize DynamoDB service with error handling
 let dynamoDb: DynamoDBService
 try {
-  dynamoDb = new DynamoDBService()
+  dynamoDb = DynamoDBService.getInstance()
 } catch (error) {
   logger.error('Failed to initialize DynamoDB service:', error)
   // Don't throw here - let the handler deal with it
